@@ -30,6 +30,7 @@ export interface InterviewSession {
   messages: Message[];
   status: InterviewStatus;
   date: string;
+  deletedAt?: string | null;
   evaluation?: string;
   emailSent?: boolean;
   followUpSentAt?: string;

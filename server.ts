@@ -182,11 +182,17 @@ function sanitizeSessionMessages(messages: any[]): any[] {
 
 async function upsertSession(session: any): Promise<void> {
   if (!session || !session.id) return;
-  const safeSession = {
+  const safeSession: any = {
     ...session,
     messages: sanitizeSessionMessages(session.messages),
     date: session.date || new Date().toISOString(),
   };
+
+  if (session.deletedAt === null) {
+    safeSession.deletedAt = null;
+  } else if (typeof session.deletedAt === "string") {
+    safeSession.deletedAt = session.deletedAt;
+  }
 
   if (firestoreClient) {
     try {
@@ -202,7 +208,13 @@ async function upsertSession(session: any): Promise<void> {
   const idx = sessions.findIndex((s) => s.id === safeSession.id);
   if (idx >= 0) {
     sessions[idx] = { ...sessions[idx], ...safeSession };
+    if (safeSession.deletedAt === null) {
+      delete sessions[idx].deletedAt;
+    }
   } else {
+    if (safeSession.deletedAt === null) {
+      delete safeSession.deletedAt;
+    }
     sessions.unshift(safeSession);
   }
   saveLocalSessions(sessions);
@@ -407,7 +419,10 @@ app.post("/api/sessions/sync", sessionSyncLimiter, async (req, res) => {
       }
     }
 
-    await upsertSession(session);
+    // Strip deletedAt from candidate sync payload to prevent unauthorized soft-delete modification
+    const { deletedAt: _ignoredDeletedAt, ...cleanSession } = session;
+
+    await upsertSession(cleanSession);
     res.json({ success: true });
   } catch (err: any) {
     console.error("[SessionSync] Error syncing session:", err);
@@ -437,7 +452,8 @@ app.post("/api/sessions/find-incomplete", findIncompleteLimiter, async (req, res
 
     const sessions = await getStoredSessions();
     const matched = sessions.filter((s: any) => {
-      if (!s || s.status === "Completed") return false;
+      if (!s || s.deletedAt) return false;
+      if (s.status === "Completed") return false;
       if (!s.candidateInfo) return false;
       const sEmail = (s.candidateInfo.email || "").trim().toLowerCase();
       const sPhone = (s.candidateInfo.phone || "").replace(/\D/g, "");
@@ -480,6 +496,22 @@ app.get("/api/admin/sessions", async (req, res) => {
 
   try {
     const sessions = await getStoredSessions();
+
+    // Background auto-purge: permanently delete sessions whose deletedAt is > 30 days old
+    const thirtyDaysMs = 30 * 24 * 60 * 60 * 1000;
+    const now = Date.now();
+    const toPurge = sessions.filter((s: any) => {
+      if (!s || !s.deletedAt) return false;
+      const deletedTime = new Date(s.deletedAt).getTime();
+      return !isNaN(deletedTime) && (now - deletedTime) > thirtyDaysMs;
+    });
+
+    if (toPurge.length > 0) {
+      Promise.all(toPurge.map((s: any) => deleteStoredSession(s.id))).catch((purgeErr) => {
+        console.warn("[Admin] Background purge error:", purgeErr);
+      });
+    }
+
     res.json({ sessions });
   } catch (err: any) {
     console.error("[Admin] Error retrieving sessions:", err);
@@ -487,7 +519,53 @@ app.get("/api/admin/sessions", async (req, res) => {
   }
 });
 
+// Soft delete: moves session to trash with deletedAt timestamp
 app.delete("/api/admin/sessions/:id", async (req, res) => {
+  const authHeader = req.headers["x-admin-passcode"] as string | undefined;
+  if (!verifyAdminAccess(authHeader, res)) return;
+
+  const { id } = req.params;
+  try {
+    const sessions = await getStoredSessions();
+    const session = sessions.find((s) => s.id === id);
+    if (!session) {
+      return res.status(404).json({ success: false, error: "Session not found" });
+    }
+
+    const deletedAt = new Date().toISOString();
+    const updated = { ...session, deletedAt };
+    await upsertSession(updated);
+    res.json({ success: true, session: updated });
+  } catch (err: any) {
+    console.error("[Admin] Error soft-deleting session:", err);
+    res.status(500).json({ error: "Failed to delete session" });
+  }
+});
+
+// Restore session from trash
+app.post("/api/admin/sessions/:id/restore", async (req, res) => {
+  const authHeader = req.headers["x-admin-passcode"] as string | undefined;
+  if (!verifyAdminAccess(authHeader, res)) return;
+
+  const { id } = req.params;
+  try {
+    const sessions = await getStoredSessions();
+    const session = sessions.find((s) => s.id === id);
+    if (!session) {
+      return res.status(404).json({ success: false, error: "Session not found" });
+    }
+
+    const updated = { ...session, deletedAt: null };
+    await upsertSession(updated);
+    res.json({ success: true, session: updated });
+  } catch (err: any) {
+    console.error("[Admin] Error restoring session:", err);
+    res.status(500).json({ error: "Failed to restore session" });
+  }
+});
+
+// Permanent deletion from trash
+app.delete("/api/admin/sessions/:id/permanent", async (req, res) => {
   const authHeader = req.headers["x-admin-passcode"] as string | undefined;
   if (!verifyAdminAccess(authHeader, res)) return;
 
@@ -496,8 +574,8 @@ app.delete("/api/admin/sessions/:id", async (req, res) => {
     const remaining = await deleteStoredSession(id);
     res.json({ success: true, remaining });
   } catch (err: any) {
-    console.error("[Admin] Error deleting session:", err);
-    res.status(500).json({ error: "Failed to delete session" });
+    console.error("[Admin] Error permanently deleting session:", err);
+    res.status(500).json({ error: "Failed to permanently delete session" });
   }
 });
 

@@ -117,7 +117,8 @@ export default function App() {
   };
 
   const deleteSession = (id: string) => {
-    setSessions(prev => prev.filter(s => s.id !== id));
+    const deletedAt = new Date().toISOString();
+    setSessions(prev => prev.map(s => s.id === id ? { ...s, deletedAt } : s));
     if (currentSessionId === id) {
       setCurrentSessionId(null);
     }
