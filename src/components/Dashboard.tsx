@@ -190,7 +190,7 @@ ESTADO: ${getEffectiveStatus(selectedSession)}`;
           ...selectedSession,
           status: 'Completed' as const,
           evaluation: data.evaluation,
-          emailSent: data.emailSent ?? true,
+          emailSent: data.emailSent ?? false,
         };
         setSessions(prev => prev.map(s => s.id === updated.id ? updated : s));
         setActiveTab('evaluation');

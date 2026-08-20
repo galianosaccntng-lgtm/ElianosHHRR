@@ -24,6 +24,13 @@ interface RateLimitRecord {
 }
 const rateLimitStore = new Map<string, RateLimitRecord>();
 
+setInterval(() => {
+  const now = Date.now();
+  for (const [key, record] of rateLimitStore) {
+    if (now > record.resetTime) rateLimitStore.delete(key);
+  }
+}, 10 * 60 * 1000).unref();
+
 function createRateLimiter(windowMs: number, maxRequests: number, message: string) {
   return (req: express.Request, res: express.Response, next: express.NextFunction) => {
     const ip = req.ip || req.socket.remoteAddress || "unknown";
@@ -466,6 +473,10 @@ app.post("/api/evaluate-and-send", evaluateLimiter, async (req, res) => {
     }
 
     const { position, candidateInfo, messages } = session;
+
+    if (!Array.isArray(messages) || messages.length > 200) {
+      return res.status(400).json({ success: false, error: "Invalid session messages payload" });
+    }
 
     let evaluationText = "";
     try {
