@@ -21,6 +21,7 @@ export interface InterviewSession {
   date: string;
   evaluation?: string;
   emailSent?: boolean;
+  followUpSentAt?: string;
 }
 
 

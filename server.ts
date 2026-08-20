@@ -56,6 +56,7 @@ const adminVerifyLimiter = createRateLimiter(15 * 60 * 1000, 5, "Too many admin 
 const chatLimiter = createRateLimiter(60 * 1000, 30, "Too many chat requests. Please slow down.");
 const sessionSyncLimiter = createRateLimiter(60 * 1000, 60, "Too many sync requests. Please slow down.");
 const evaluateLimiter = createRateLimiter(10 * 60 * 1000, 5, "Too many evaluation requests. Please wait before submitting again.");
+const adminFollowUpLimiter = createRateLimiter(60 * 60 * 1000, 10, "Too many follow-up emails sent. Please try again later (maximum 10 per hour).");
 
 // Centralized admin authentication verification helper
 function verifyAdminAccess(provided: string | undefined, res: express.Response): boolean {
@@ -399,6 +400,89 @@ app.delete("/api/admin/sessions/:id", async (req, res) => {
   } catch (err: any) {
     console.error("[Admin] Error deleting session:", err);
     res.status(500).json({ error: "Failed to delete session" });
+  }
+});
+
+// Follow-up email endpoint for incomplete candidate applications
+app.post("/api/admin/sessions/:id/send-followup", adminFollowUpLimiter, async (req, res) => {
+  const authHeader = req.headers["x-admin-passcode"] as string | undefined;
+  if (!verifyAdminAccess(authHeader, res)) return;
+
+  const { id } = req.params;
+
+  try {
+    const sessions = await getStoredSessions();
+    const session = sessions.find((s) => s.id === id);
+
+    if (!session) {
+      return res.status(404).json({ success: false, error: "Session not found" });
+    }
+
+    const email = session.candidateInfo?.email?.trim();
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    if (!email || !emailRegex.test(email)) {
+      return res.status(400).json({ success: false, error: "Candidate email is missing or invalid" });
+    }
+
+    const transporter = getMailTransporter();
+    if (!transporter) {
+      return res.status(503).json({
+        success: false,
+        error: "El servicio de correo no está configurado (EMAIL_USER/EMAIL_PASS).",
+      });
+    }
+
+    const candidateName = session.candidateInfo?.name || "there";
+    const position = session.position || "team member";
+    const appUrl = process.env.APP_URL ? process.env.APP_URL.trim() : "";
+
+    const linkParagraph = appUrl
+      ? `\n\nYou can resume your application here: ${appUrl}\n`
+      : "";
+
+    const mailSubject = `${candidateName}, your Ellianos Coffee application is almost complete!`;
+    const mailBody = `Hi ${candidateName},
+
+Thank you for starting your application for the ${position} position at our new Ellianos Coffee location in Lehigh Acres, FL!
+
+We noticed your virtual interview wasn't completed, and we'd love to hear more from you. Your information is saved, so you can pick up right where you left off — it only takes a few minutes.${linkParagraph}
+If you have any questions or ran into any issues, just reply to this email and we'll be happy to help.
+
+We hope to hear from you soon!
+
+Warm regards,
+The Ellianos Coffee Hiring Team
+Lehigh Acres, FL`;
+
+    try {
+      await transporter.sendMail({
+        from: process.env.EMAIL_USER,
+        to: email,
+        subject: mailSubject,
+        text: mailBody,
+      });
+    } catch (mailErr: any) {
+      console.error("[Email Follow-up] Failed to dispatch email:", mailErr);
+      return res.status(500).json({
+        success: false,
+        error: mailErr.message || "Failed to send follow-up email.",
+      });
+    }
+
+    const followUpSentAt = new Date().toISOString();
+    const updatedSession = {
+      ...session,
+      followUpSentAt,
+    };
+
+    await upsertSession(updatedSession);
+    return res.json({ success: true, followUpSentAt });
+  } catch (err: any) {
+    console.error("[Admin Follow-up] Internal error:", err);
+    return res.status(500).json({
+      success: false,
+      error: err.message || "Internal server error while sending follow-up.",
+    });
   }
 });
 

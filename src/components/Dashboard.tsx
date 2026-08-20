@@ -51,6 +51,9 @@ export function Dashboard({ adminToken, onBack, onLogout, onResume, onDelete, on
   const [searchQuery, setSearchQuery] = useState('');
   const [positionFilter, setPositionFilter] = useState<string>('All');
   const [statusFilter, setStatusFilter] = useState<string>('All');
+  const [isSendingFollowUp, setIsSendingFollowUp] = useState(false);
+  const [followUpSuccessEmail, setFollowUpSuccessEmail] = useState<string | null>(null);
+  const [followUpError, setFollowUpError] = useState<string | null>(null);
 
   const fetchServerSessions = async () => {
     if (!adminToken) return;
@@ -200,6 +203,56 @@ ESTADO: ${getEffectiveStatus(selectedSession)}`;
       alert('No se pudo generar la evaluación en este momento.');
     } finally {
       setIsEvaluating(false);
+    }
+  };
+
+  const handleSendFollowUp = async (session: InterviewSession) => {
+    if (!session || !session.id || !adminToken || isSendingFollowUp) return;
+    const email = session.candidateInfo?.email;
+    if (!email) {
+      alert('El candidato no tiene un correo electrónico registrado.');
+      return;
+    }
+
+    setIsSendingFollowUp(true);
+    setFollowUpError(null);
+    try {
+      const res = await fetch(`/api/admin/sessions/${session.id}/send-followup`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-admin-passcode': adminToken,
+        },
+      });
+
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !data.success) {
+        throw new Error(data.error || 'No se pudo enviar el correo de seguimiento.');
+      }
+
+      const followUpDate = data.followUpSentAt || new Date().toISOString();
+      const updated = {
+        ...session,
+        followUpSentAt: followUpDate,
+      };
+
+      setSessions(prev => prev.map(s => s.id === updated.id ? updated : s));
+      if (onSessionsUpdated) {
+        onSessionsUpdated(sessions.map(s => s.id === updated.id ? updated : s));
+      }
+
+      setFollowUpSuccessEmail(email);
+      setTimeout(() => {
+        setFollowUpSuccessEmail(null);
+      }, 4000);
+    } catch (err: any) {
+      console.error('Failed to send follow-up email:', err);
+      setFollowUpError(err.message || 'Error al enviar correo de seguimiento.');
+      setTimeout(() => {
+        setFollowUpError(null);
+      }, 6000);
+    } finally {
+      setIsSendingFollowUp(false);
     }
   };
 
@@ -581,26 +634,62 @@ ESTADO: ${getEffectiveStatus(selectedSession)}`;
                       <p className="text-xs text-amber-800 font-light mt-0.5">
                         El candidato llenó el formulario de registro pero no completó o abandonó la entrevista virtual. Tiene los datos de contacto listos para seguimiento telefónico o por correo.
                       </p>
+                      {followUpSuccessEmail && (
+                        <div className="mt-2 text-xs font-semibold text-green-700 flex items-center gap-1.5 bg-green-50 border border-green-200 px-2.5 py-1 rounded-lg">
+                          <Check className="w-3.5 h-3.5" /> Correo de seguimiento enviado a {followUpSuccessEmail}
+                        </div>
+                      )}
+                      {followUpError && (
+                        <div className="mt-2 text-xs font-semibold text-red-700 flex items-center gap-1.5 bg-red-50 border border-red-200 px-2.5 py-1 rounded-lg">
+                          <AlertCircle className="w-3.5 h-3.5" /> {followUpError}
+                        </div>
+                      )}
                     </div>
                   </div>
 
-                  <div className="flex items-center gap-2 shrink-0">
-                    {selectedSession.candidateInfo?.phone && (
-                      <a 
-                        href={`tel:${selectedSession.candidateInfo.phone}`}
-                        className="px-3 py-1.5 bg-amber-700 text-white rounded-xl text-xs font-bold uppercase tracking-wider hover:bg-amber-800 transition-colors flex items-center gap-1"
-                      >
-                        <Phone className="w-3 h-3" /> Llamar
-                      </a>
+                  <div className="flex flex-col md:flex-row items-start md:items-center gap-2 shrink-0">
+                    {selectedSession.followUpSentAt && (
+                      <span className="text-[11px] text-amber-800/80 font-medium">
+                        Último recordatorio: {new Date(selectedSession.followUpSentAt).toLocaleDateString()}
+                      </span>
                     )}
-                    {selectedSession.candidateInfo?.email && (
-                      <a 
-                        href={`mailto:${selectedSession.candidateInfo.email}`}
-                        className="px-3 py-1.5 bg-white border border-amber-300 text-amber-900 rounded-xl text-xs font-bold uppercase tracking-wider hover:bg-amber-100 transition-colors flex items-center gap-1"
-                      >
-                        <Mail className="w-3 h-3" /> Email
-                      </a>
-                    )}
+                    <div className="flex items-center gap-2">
+                      {selectedSession.candidateInfo?.phone && (
+                        <a 
+                          href={`tel:${selectedSession.candidateInfo.phone}`}
+                          className="px-3 py-1.5 bg-amber-700 text-white rounded-xl text-xs font-bold uppercase tracking-wider hover:bg-amber-800 transition-colors flex items-center gap-1"
+                        >
+                          <Phone className="w-3 h-3" /> Llamar
+                        </a>
+                      )}
+                      {selectedSession.candidateInfo?.email && (
+                        <button 
+                          onClick={() => handleSendFollowUp(selectedSession)}
+                          disabled={isSendingFollowUp}
+                          className={clsx(
+                            "px-3 py-1.5 rounded-xl text-xs font-bold uppercase tracking-wider transition-colors flex items-center gap-1.5 shadow-xs disabled:opacity-60",
+                            followUpSuccessEmail
+                              ? "bg-green-600 text-white border border-green-700"
+                              : "bg-white border border-amber-300 text-amber-900 hover:bg-amber-100"
+                          )}
+                          title="Enviar correo de seguimiento automático al candidato"
+                        >
+                          {isSendingFollowUp ? (
+                            <>
+                              <Loader2 className="w-3.5 h-3.5 animate-spin" /> Enviando...
+                            </>
+                          ) : followUpSuccessEmail ? (
+                            <>
+                              <Check className="w-3.5 h-3.5" /> Enviado
+                            </>
+                          ) : (
+                            <>
+                              <Mail className="w-3.5 h-3.5" /> Email
+                            </>
+                          )}
+                        </button>
+                      )}
+                    </div>
                   </div>
                 </div>
               )}
