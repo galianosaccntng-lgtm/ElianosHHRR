@@ -7,9 +7,20 @@ export interface CandidateInfo {
   email: string;
 }
 
+export interface TypingMetrics {
+  typingDurationMs: number;
+  keystrokes: number;
+  maxInsertChunk: number;
+  responseDelayMs: number;
+  tabSwitches: number;
+  wpm: number;
+  pasteAttempts?: number;
+}
+
 export interface Message {
   role: 'user' | 'model';
   parts: { text: string }[];
+  metrics?: TypingMetrics;
 }
 
 export interface InterviewSession {

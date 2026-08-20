@@ -26,6 +26,40 @@ export function getEffectiveStatus(session: InterviewSession): InterviewStatus {
   return 'In Progress';
 }
 
+export function getSessionAuthenticitySummary(session: InterviewSession) {
+  const userMessages = (session.messages || []).filter(m => m.role === 'user' && m.metrics);
+  if (userMessages.length === 0) {
+    return null;
+  }
+
+  let totalPasteAttempts = 0;
+  let totalTabSwitches = 0;
+  let totalWpm = 0;
+  let largeInsertChunksCount = 0;
+
+  userMessages.forEach(m => {
+    const met = m.metrics!;
+    totalPasteAttempts += met.pasteAttempts || 0;
+    totalTabSwitches += met.tabSwitches || 0;
+    totalWpm += met.wpm || 0;
+    if ((met.maxInsertChunk || 0) > 40) {
+      largeInsertChunksCount += 1;
+    }
+  });
+
+  const avgWpm = Math.round(totalWpm / userMessages.length);
+  const requiresReview = totalPasteAttempts > 0 || totalTabSwitches > 3 || largeInsertChunksCount > 0;
+
+  return {
+    totalPasteAttempts,
+    totalTabSwitches,
+    avgWpm,
+    largeInsertChunksCount,
+    requiresReview,
+    answersWithMetricsCount: userMessages.length,
+  };
+}
+
 function formatInterviewDate(dateStr?: string): string {
   if (!dateStr) return 'Fecha Reciente';
   const d = new Date(dateStr);
@@ -457,6 +491,7 @@ ESTADO: ${getEffectiveStatus(selectedSession)}`;
                   {filteredSessions.map((session) => {
                     const effectiveStatus = getEffectiveStatus(session);
                     const userResponsesCount = session.messages ? session.messages.filter((m, i) => m.role === 'user' && i > 0).length : 0;
+                    const authSummary = getSessionAuthenticitySummary(session);
                     
                     return (
                       <div 
@@ -490,6 +525,12 @@ ESTADO: ${getEffectiveStatus(selectedSession)}`;
                             {session.evaluation && (
                               <span className="text-[10px] uppercase tracking-widest font-bold px-2.5 py-0.5 rounded-full bg-[#4B2C20] text-[#FAF7F2] flex items-center gap-1">
                                 <Award className="w-3 h-3 text-[#D4A373]" /> Evaluada por IA
+                              </span>
+                            )}
+
+                            {authSummary && authSummary.requiresReview && (
+                              <span className="text-[10px] uppercase tracking-widest font-bold px-2.5 py-0.5 rounded-full bg-amber-100 text-amber-900 border border-amber-300 flex items-center gap-1">
+                                ⚠ Revisar autenticidad
                               </span>
                             )}
                           </div>
@@ -592,6 +633,17 @@ ESTADO: ${getEffectiveStatus(selectedSession)}`;
                     )}>
                       Estado: {getEffectiveStatus(selectedSession) === 'Completed' ? 'Completada' : getEffectiveStatus(selectedSession) === 'In Progress' ? 'En Progreso' : 'Incompleta / Solo Datos'}
                     </span>
+                    {(() => {
+                      const detailAuth = getSessionAuthenticitySummary(selectedSession);
+                      if (detailAuth && detailAuth.requiresReview) {
+                        return (
+                          <span className="text-[10px] uppercase tracking-widest font-bold px-2.5 py-0.5 rounded-full bg-amber-100 text-amber-900 border border-amber-300 flex items-center gap-1">
+                            ⚠ Revisar autenticidad
+                          </span>
+                        );
+                      }
+                      return null;
+                    })()}
                     <span className="text-xs text-[#4B2C20]/70 font-light">
                       Registrado el {formatInterviewDate(selectedSession.date)}
                     </span>
@@ -693,6 +745,37 @@ ESTADO: ${getEffectiveStatus(selectedSession)}`;
                   </div>
                 </div>
               )}
+
+              {/* Authenticity Summary Bar (if metrics exist) */}
+              {(() => {
+                const detailAuth = getSessionAuthenticitySummary(selectedSession);
+                if (!detailAuth) return null;
+
+                return (
+                  <div className="mb-6 p-4 bg-[#FAF7F2] border border-[#E8DFD8] rounded-2xl flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs shadow-2xs">
+                    <div className="flex items-center gap-2">
+                      <span className="text-[11px] uppercase tracking-wider font-bold text-[#D4A373]">
+                        Señales de Autenticidad:
+                      </span>
+                      {detailAuth.requiresReview ? (
+                        <span className="text-[10px] uppercase tracking-widest font-bold px-2 py-0.5 rounded-full bg-amber-100 text-amber-900 border border-amber-300 flex items-center gap-1">
+                          ⚠ Revisar autenticidad
+                        </span>
+                      ) : (
+                        <span className="text-[10px] uppercase tracking-widest font-bold px-2 py-0.5 rounded-full bg-green-100 text-green-800 border border-green-200">
+                          ✓ Normales
+                        </span>
+                      )}
+                    </div>
+                    <div className="flex flex-wrap items-center gap-x-5 gap-y-1.5 text-xs text-[#4B2C20]">
+                      <span>WPM Promedio: <strong className="font-semibold text-[#4B2C20]">{detailAuth.avgWpm}</strong></span>
+                      <span>Intentos de Pegado: <strong className={clsx("font-semibold", detailAuth.totalPasteAttempts > 0 ? "text-amber-800" : "text-[#4B2C20]")}>{detailAuth.totalPasteAttempts}</strong></span>
+                      <span>Cambios de Pestaña: <strong className={clsx("font-semibold", detailAuth.totalTabSwitches > 3 ? "text-amber-800" : "text-[#4B2C20]")}>{detailAuth.totalTabSwitches}</strong></span>
+                      <span>Inserciones &gt;40c: <strong className={clsx("font-semibold", detailAuth.largeInsertChunksCount > 0 ? "text-amber-800" : "text-[#4B2C20]")}>{detailAuth.largeInsertChunksCount}</strong></span>
+                    </div>
+                  </div>
+                );
+              })()}
 
               {/* Tabs Bar */}
               <div className="flex flex-wrap items-center gap-2 mb-6 border-b border-[#E8DFD8] pb-3">
@@ -852,6 +935,21 @@ ESTADO: ${getEffectiveStatus(selectedSession)}`;
                               <p className="whitespace-pre-wrap font-light">{msg.parts?.[0]?.text || ''}</p>
                             )}
                           </div>
+                          {msg.metrics && (
+                            <span className="text-[10px] text-[#4B2C20]/50 mt-1 mr-1 flex items-center gap-2">
+                              <span>WPM: {msg.metrics.wpm}</span>
+                              <span>·</span>
+                              <span>Pegado: {msg.metrics.pasteAttempts || 0}</span>
+                              <span>·</span>
+                              <span>Pestañas: {msg.metrics.tabSwitches || 0}</span>
+                              {msg.metrics.maxInsertChunk > 40 && (
+                                <>
+                                  <span>·</span>
+                                  <span className="text-amber-800 font-semibold">Chunk: {msg.metrics.maxInsertChunk}c</span>
+                                </>
+                              )}
+                            </span>
+                          )}
                         </div>
                       );
                     })

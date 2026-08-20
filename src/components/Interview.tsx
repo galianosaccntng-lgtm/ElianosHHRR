@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Position, Message, InterviewSession } from '../types';
+import { Position, Message, InterviewSession, TypingMetrics } from '../types';
 import { Send, ArrowLeft, Bot, User, Loader2, CheckCircle, PartyPopper, RefreshCw, AlertCircle } from 'lucide-react';
 import Markdown from 'react-markdown';
 import clsx from 'clsx';
@@ -17,10 +17,43 @@ export function Interview({ session, onBack, onUpdateSession }: InterviewProps) 
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isSuccess, setIsSuccess] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [showPasteWarning, setShowPasteWarning] = useState(false);
   
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const lastInitSessionId = useRef<string | null>(null);
+  const pasteWarningTimerRef = useRef<NodeJS.Timeout | null>(null);
+
+  // Authenticity & Typing Telemetry Refs
+  const firstKeystrokeTimeRef = useRef<number | null>(null);
+  const lastQuestionReceivedAtRef = useRef<number>(Date.now());
+  const keystrokesRef = useRef<number>(0);
+  const maxInsertChunkRef = useRef<number>(0);
+  const tabSwitchesRef = useRef<number>(0);
+  const pasteAttemptsRef = useRef<number>(0);
+  const lastInputLengthRef = useRef<number>(0);
+
+  // Track tab / window visibility switches
+  useEffect(() => {
+    const handleVisibilityChange = () => {
+      if (document.hidden) {
+        tabSwitchesRef.current += 1;
+      }
+    };
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    return () => {
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+    };
+  }, []);
+
+  // Cleanup paste warning timer on unmount
+  useEffect(() => {
+    return () => {
+      if (pasteWarningTimerRef.current) {
+        clearTimeout(pasteWarningTimerRef.current);
+      }
+    };
+  }, []);
 
   // Scroll to bottom when messages change
   useEffect(() => {
@@ -33,6 +66,33 @@ export function Interview({ session, onBack, onUpdateSession }: InterviewProps) 
       textareaRef.current?.focus();
     }
   }, [isLoading, isSubmitting, isSuccess]);
+
+  const handleBlockedPaste = (e: React.ClipboardEvent | React.DragEvent) => {
+    e.preventDefault();
+    pasteAttemptsRef.current += 1;
+    setShowPasteWarning(true);
+    if (pasteWarningTimerRef.current) {
+      clearTimeout(pasteWarningTimerRef.current);
+    }
+    pasteWarningTimerRef.current = setTimeout(() => {
+      setShowPasteWarning(false);
+    }, 4000);
+  };
+
+  const handleInputChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
+    const val = e.target.value;
+    const now = Date.now();
+    if (firstKeystrokeTimeRef.current === null && val.length > 0) {
+      firstKeystrokeTimeRef.current = now;
+    }
+    keystrokesRef.current += 1;
+    const inserted = Math.max(0, val.length - lastInputLengthRef.current);
+    if (inserted > maxInsertChunkRef.current) {
+      maxInsertChunkRef.current = inserted;
+    }
+    lastInputLengthRef.current = val.length;
+    setInput(val);
+  };
 
   const initChat = async (retryCount = 0) => {
     setIsLoading(true);
@@ -69,6 +129,7 @@ export function Interview({ session, onBack, onUpdateSession }: InterviewProps) 
           { role: 'model', parts: [{ text: data.text }] }
         ]
       });
+      lastQuestionReceivedAtRef.current = Date.now();
     } catch (err: any) {
       console.error('Initialization error:', err);
       if (retryCount < 2) {
@@ -86,6 +147,7 @@ export function Interview({ session, onBack, onUpdateSession }: InterviewProps) 
   useEffect(() => {
     if (session.messages && session.messages.length > 0) {
       lastInitSessionId.current = session.id;
+      lastQuestionReceivedAtRef.current = Date.now();
       return;
     }
     if (lastInitSessionId.current === session.id) return;
@@ -99,7 +161,35 @@ export function Interview({ session, onBack, onUpdateSession }: InterviewProps) 
     if (!textToSend || isLoading || isSubmitting) return;
 
     setErrorMessage(null);
-    const userMessage: Message = { role: 'user', parts: [{ text: textToSend }] };
+
+    // Calculate typing telemetry metrics
+    const now = Date.now();
+    const firstKeyTime = firstKeystrokeTimeRef.current || now;
+    const typingDurationMs = Math.max(1, now - firstKeyTime);
+    const responseDelayMs = Math.max(0, firstKeyTime - lastQuestionReceivedAtRef.current);
+    const words = textToSend.split(/\s+/).filter(Boolean).length;
+    const durationMinutes = typingDurationMs / 60000;
+    const wpm = durationMinutes > 0 ? Math.round(words / durationMinutes) : 0;
+
+    const metrics: TypingMetrics = {
+      typingDurationMs,
+      keystrokes: keystrokesRef.current,
+      maxInsertChunk: maxInsertChunkRef.current,
+      responseDelayMs,
+      tabSwitches: tabSwitchesRef.current,
+      wpm,
+      pasteAttempts: pasteAttemptsRef.current,
+    };
+
+    // Reset telemetry contadores for next answer
+    firstKeystrokeTimeRef.current = null;
+    keystrokesRef.current = 0;
+    maxInsertChunkRef.current = 0;
+    tabSwitchesRef.current = 0;
+    pasteAttemptsRef.current = 0;
+    lastInputLengthRef.current = 0;
+
+    const userMessage: Message = { role: 'user', parts: [{ text: textToSend }], metrics };
     const newHistory = [...session.messages, userMessage];
     
     // Optimistically update messages
@@ -130,6 +220,7 @@ export function Interview({ session, onBack, onUpdateSession }: InterviewProps) 
         status: 'In Progress',
         messages: [...newHistory, { role: 'model', parts: [{ text: data.text }] }]
       });
+      lastQuestionReceivedAtRef.current = Date.now();
     } catch (err: any) {
       console.error('Message delivery error:', err);
       // Restore user text in input so they don't lose what they wrote
@@ -376,6 +467,12 @@ export function Interview({ session, onBack, onUpdateSession }: InterviewProps) 
       {/* Input Area */}
       <div className="bg-white border-t border-[#E8DFD8] p-4 shrink-0">
         <div className="max-w-3xl mx-auto">
+          {showPasteWarning && (
+            <div className="mb-2.5 px-4 py-2.5 bg-amber-50 border border-amber-200 rounded-xl text-xs text-amber-900 flex items-center gap-2 shadow-sm animate-in fade-in slide-in-from-bottom-2 duration-300">
+              <AlertCircle className="w-4 h-4 text-amber-700 shrink-0" />
+              <span>Pasting is disabled — we'd love to hear your answers in your own words!</span>
+            </div>
+          )}
           <form 
             onSubmit={handleSend}
             className="flex items-end bg-[#FAF7F2] border border-[#E8DFD8] rounded-xl overflow-hidden focus-within:ring-2 focus-within:ring-[#D4A373] focus-within:border-transparent transition-all shadow-sm"
@@ -383,7 +480,9 @@ export function Interview({ session, onBack, onUpdateSession }: InterviewProps) 
             <textarea
               ref={textareaRef}
               value={input}
-              onChange={(e) => setInput(e.target.value)}
+              onChange={handleInputChange}
+              onPaste={handleBlockedPaste}
+              onDrop={handleBlockedPaste}
               onKeyDown={handleKeyDown}
               placeholder="Enter your response here... (Press Enter to send, Shift+Enter for new line)"
               className="flex-1 max-h-32 p-4 bg-transparent border-none focus:ring-0 resize-none outline-none text-[#4B2C20] text-sm disabled:opacity-50"

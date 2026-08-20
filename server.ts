@@ -140,10 +140,51 @@ async function getStoredSessions(): Promise<any[]> {
   return getLocalSessions();
 }
 
+function sanitizeSessionMessages(messages: any[]): any[] {
+  if (!Array.isArray(messages)) return [];
+  return messages.map((m) => {
+    if (!m || typeof m !== "object") return m;
+    const sanitizedMsg: any = {
+      role: m.role === "model" ? "model" : "user",
+      parts: Array.isArray(m.parts)
+        ? m.parts.map((p: any) => ({ text: typeof p?.text === "string" ? p.text : "" }))
+        : [{ text: "" }],
+    };
+
+    if (m.metrics && typeof m.metrics === "object") {
+      const {
+        typingDurationMs,
+        keystrokes,
+        maxInsertChunk,
+        responseDelayMs,
+        tabSwitches,
+        wpm,
+        pasteAttempts,
+      } = m.metrics;
+
+      const sanitizedMetrics: any = {};
+      if (typeof typingDurationMs === "number" && !isNaN(typingDurationMs)) sanitizedMetrics.typingDurationMs = typingDurationMs;
+      if (typeof keystrokes === "number" && !isNaN(keystrokes)) sanitizedMetrics.keystrokes = keystrokes;
+      if (typeof maxInsertChunk === "number" && !isNaN(maxInsertChunk)) sanitizedMetrics.maxInsertChunk = maxInsertChunk;
+      if (typeof responseDelayMs === "number" && !isNaN(responseDelayMs)) sanitizedMetrics.responseDelayMs = responseDelayMs;
+      if (typeof tabSwitches === "number" && !isNaN(tabSwitches)) sanitizedMetrics.tabSwitches = tabSwitches;
+      if (typeof wpm === "number" && !isNaN(wpm)) sanitizedMetrics.wpm = wpm;
+      if (typeof pasteAttempts === "number" && !isNaN(pasteAttempts)) sanitizedMetrics.pasteAttempts = pasteAttempts;
+
+      if (Object.keys(sanitizedMetrics).length > 0) {
+        sanitizedMsg.metrics = sanitizedMetrics;
+      }
+    }
+
+    return sanitizedMsg;
+  });
+}
+
 async function upsertSession(session: any): Promise<void> {
   if (!session || !session.id) return;
   const safeSession = {
     ...session,
+    messages: sanitizeSessionMessages(session.messages),
     date: session.date || new Date().toISOString(),
   };
 
@@ -285,7 +326,11 @@ function generateLocalEvaluation(session: any): string {
 ---
 
 ### AI Evaluation Status: Unavailable
-La evaluación con IA no estaba disponible en el momento del envío. No se generó puntaje ni recomendación automática. Por favor revise la transcripción completa manualmente para evaluar la idoneidad del candidato.`;
+La evaluación con IA no estaba disponible en el momento del envío. No se generó puntaje ni recomendación automática. Por favor revise la transcripción completa manualmente para evaluar la idoneidad del candidato.
+
+### Authenticity Signals
+- **Nivel de preocupación:** N/A (Evaluación automática no disponible).
+- **Métricas:** Consulte el panel de RRHH para ver detalles de velocidad de escritura (WPM), cambios de pestaña e intentos de pegado.`;
 }
 
 async function generateContentWithInfiniteResilience(request: any) {
@@ -617,12 +662,26 @@ app.post("/api/evaluate-and-send", evaluateLimiter, async (req, res) => {
 
     let evaluationText = "";
     try {
+      const userResponses = (messages || []).filter((m: any) => m.role === "user");
+      const metricsSummary = userResponses
+        .map((m: any, idx: number) => {
+          const text = m.parts?.[0]?.text || "";
+          const metrics = m.metrics;
+          if (!metrics) {
+            return `Response ${idx + 1} (${text.length} chars): [No typing metrics recorded]`;
+          }
+          const durSec = ((metrics.typingDurationMs || 0) / 1000).toFixed(1);
+          const delaySec = ((metrics.responseDelayMs || 0) / 1000).toFixed(1);
+          return `Response ${idx + 1} (${text.length} chars): WPM: ${metrics.wpm || 0}, Duration: ${durSec}s, Paste Attempts: ${metrics.pasteAttempts || 0}, Max Insert Chunk: ${metrics.maxInsertChunk || 0}, Tab Switches: ${metrics.tabSwitches || 0}, Response Delay: ${delaySec}s, Keystrokes: ${metrics.keystrokes || 0}`;
+        })
+        .join("\n");
+
       const prompt = `You are a Senior HR Manager reviewing an interview transcript for the position of ${position} at Ellianos Coffee.
 Candidate Name: ${candidateInfo.name}
 Phone: ${candidateInfo.phone}
 Email: ${candidateInfo.email}
 
-Below is the interview transcript. 
+Below is the interview transcript and the candidate's typing metrics summary. 
 Review it carefully and provide a final evaluation of the candidate in clear Markdown format.
 
 You must include:
@@ -630,6 +689,10 @@ You must include:
 2. A summary of their strengths.
 3. A summary of their weaknesses or areas of concern.
 4. A final recommendation (Hire, Do Not Hire, or Second Interview).
+5. AUTHENTICITY ASSESSMENT: Using the typing metrics AND the writing style, add a section titled 'Authenticity Signals' with a level (Low / Medium / High concern) and the specific evidence. Consider: paste attempts, unusually high WPM (>80 sustained), large single-event text insertions, tab switches right before polished answers, very short response delays for long complex answers, and abrupt style/register shifts between answers. IMPORTANT: these are signals for the hiring team to probe in a live follow-up interview, NOT grounds for automatic rejection. Non-native English speakers may write formally; do not flag formal writing alone. Never lower the candidate's score solely because of authenticity signals — report them separately.
+
+Candidate Typing Metrics per Response:
+${metricsSummary || "No typing telemetry available."}
 
 Transcript:
 ${(messages || []).map((m: any) => `[${(m.role || "USER").toUpperCase()}]: ${m.parts?.[0]?.text || ""}`).join("\n\n")}

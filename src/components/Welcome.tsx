@@ -199,29 +199,34 @@ export function Welcome({ onSelectPosition, onResumeSession, onOpenDashboard, ha
                     </div>
                   </div>
 
-                  <div className="pt-8 flex justify-between items-center">
-                    <button
-                      type="button"
-                      onClick={() => setStep('intro')}
-                      className="text-xs uppercase tracking-widest text-[#4B2C20]/60 hover:text-[#4B2C20] font-bold transition-colors"
-                    >
-                      Back
-                    </button>
-                    <button
-                      type="submit"
-                      disabled={!isFormValid || isCheckingResume}
-                      className="flex items-center gap-2 bg-[#4B2C20] text-[#FAF7F2] px-8 py-4 rounded-xl font-bold text-xs uppercase tracking-widest hover:bg-[#3E2723] disabled:opacity-50 disabled:hover:bg-[#4B2C20] disabled:transform-none transition-all shadow-md hover:shadow-lg hover:-translate-y-0.5"
-                    >
-                      {isCheckingResume ? (
-                        <>
-                          <Loader2 className="w-4 h-4 animate-spin text-[#D4A373]" /> Checking...
-                        </>
-                      ) : (
-                        <>
-                          Begin Interview <ChevronRight className="w-4 h-4" />
-                        </>
-                      )}
-                    </button>
+                  <div className="pt-8 flex flex-col items-end gap-3">
+                    <div className="w-full flex justify-between items-center">
+                      <button
+                        type="button"
+                        onClick={() => setStep('intro')}
+                        className="text-xs uppercase tracking-widest text-[#4B2C20]/60 hover:text-[#4B2C20] font-bold transition-colors"
+                      >
+                        Back
+                      </button>
+                      <button
+                        type="submit"
+                        disabled={!isFormValid || isCheckingResume}
+                        className="flex items-center gap-2 bg-[#4B2C20] text-[#FAF7F2] px-8 py-4 rounded-xl font-bold text-xs uppercase tracking-widest hover:bg-[#3E2723] disabled:opacity-50 disabled:hover:bg-[#4B2C20] disabled:transform-none transition-all shadow-md hover:shadow-lg hover:-translate-y-0.5"
+                      >
+                        {isCheckingResume ? (
+                          <>
+                            <Loader2 className="w-4 h-4 animate-spin text-[#D4A373]" /> Checking...
+                          </>
+                        ) : (
+                          <>
+                            Begin Interview <ChevronRight className="w-4 h-4" />
+                          </>
+                        )}
+                      </button>
+                    </div>
+                    <p className="text-[11px] text-[#4B2C20]/60 font-light text-right">
+                      To keep our process fair, this interview measures typing activity and disables pasting.
+                    </p>
                   </div>
                 </div>
               </form>
