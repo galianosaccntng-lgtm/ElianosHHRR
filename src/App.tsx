@@ -9,7 +9,7 @@ const STORAGE_KEY = 'ellianos_candidate_sessions_v1';
 const CURRENT_ID_KEY = 'ellianos_active_session_id_v1';
 const ADMIN_AUTH_KEY = 'ellianos_admin_passcode_token';
 
-function getMergedLocalSessions(): InterviewSession[] {
+function getLocalSessions(): InterviewSession[] {
   try {
     const saved = localStorage.getItem(STORAGE_KEY);
     return saved ? JSON.parse(saved) : [];
@@ -19,43 +19,9 @@ function getMergedLocalSessions(): InterviewSession[] {
   }
 }
 
-function mergeSessionLists(listA: InterviewSession[], listB: InterviewSession[]): InterviewSession[] {
-  const map = new Map<string, InterviewSession>();
-  for (const s of listA) {
-    if (s && s.id) map.set(s.id, s);
-  }
-  for (const s of listB) {
-    if (s && s.id) {
-      if (!map.has(s.id)) {
-        console.log(`[StorageSync] New session identified during merge: id=${s.id}, candidate=${s.candidateInfo?.name || 'Unknown'}`);
-        map.set(s.id, s);
-      } else {
-        const existing = map.get(s.id)!;
-        const sMsgs = s.messages?.length || 0;
-        const eMsgs = existing.messages?.length || 0;
-        
-        // Retain the most complete and recent version
-        if (s.status === 'Completed' || sMsgs >= eMsgs || s.evaluation) {
-          console.log(`[StorageSync] Updating session record: id=${s.id} (status: ${existing.status} -> ${s.status}, messages: ${eMsgs} -> ${sMsgs})`);
-          map.set(s.id, { ...existing, ...s });
-        } else {
-          console.log(`[StorageSync] Preserving existing more complete session record: id=${s.id} (existing msgs: ${eMsgs} vs incoming msgs: ${sMsgs})`);
-        }
-      }
-    }
-  }
-  const result = Array.from(map.values()).sort((a, b) => {
-    const tA = a.date ? new Date(a.date).getTime() : 0;
-    const tB = b.date ? new Date(b.date).getTime() : 0;
-    return tB - tA;
-  });
-  console.log(`[StorageSync] Merged total active sessions count: ${result.length}`);
-  return result;
-}
-
 export default function App() {
   const [sessions, setSessions] = useState<InterviewSession[]>(() => {
-    return getMergedLocalSessions();
+    return getLocalSessions();
   });
 
   const [currentSessionId, setCurrentSessionId] = useState<string | null>(() => {
@@ -76,49 +42,10 @@ export default function App() {
     }
   });
 
-  // Load server sessions on startup and merge safely with localStorage
-  useEffect(() => {
-    const loadServerSessions = async () => {
-      try {
-        const res = await fetch('/api/sessions');
-        if (res.ok) {
-          const data = await res.json();
-          const serverSessions: InterviewSession[] = data.sessions || [];
-          if (serverSessions.length > 0) {
-            setSessions(prev => {
-              const local = getMergedLocalSessions();
-              const merged = mergeSessionLists(serverSessions, mergeSessionLists(prev, local));
-              try {
-                console.log(`[LocalStorage:ServerSync] Initiating write: merged array length before write = ${merged.length}`);
-                localStorage.setItem(STORAGE_KEY, JSON.stringify(merged));
-                const verifiedLength = getMergedLocalSessions().length;
-                console.log(`[LocalStorage:ServerSync] Write verified successfully: array length in storage after write = ${verifiedLength}`);
-              } catch (e) {
-                console.warn('Unable to write merged sessions to localStorage:', e);
-              }
-              return merged;
-            });
-          }
-        }
-      } catch (err) {
-        console.warn('Initial session fetch from server skipped or failed:', err);
-      }
-    };
-    loadServerSessions();
-  }, []);
-
-  // Sync to localStorage only when sessions has items or is actively managed
+  // Sync state to localStorage
   useEffect(() => {
     try {
-      if (sessions.length > 0) {
-        const currentLocal = getMergedLocalSessions();
-        const localBeforeLen = currentLocal.length;
-        const merged = mergeSessionLists(currentLocal, sessions);
-        console.log(`[LocalStorage:StateSync] Initiating write: localBeforeLength = ${localBeforeLen}, inStateLength = ${sessions.length}, mergedLengthBeforeWrite = ${merged.length}`);
-        localStorage.setItem(STORAGE_KEY, JSON.stringify(merged));
-        const verifiedLength = getMergedLocalSessions().length;
-        console.log(`[LocalStorage:StateSync] Write verified successfully: array length in storage after write = ${verifiedLength}`);
-      }
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(sessions));
     } catch (e) {
       console.warn('Unable to sync to localStorage:', e);
     }
@@ -136,22 +63,13 @@ export default function App() {
     }
   }, [currentSessionId]);
 
-  // Sync candidate session directly to the server database
+  // Sync candidate's own session to server
   const syncSessionToServer = (session: InterviewSession) => {
-    console.log(`[ServerSync] Dispatching session to server: id=${session.id}, status=${session.status}, candidate=${session.candidateInfo?.name || 'Unknown'}`);
     fetch('/api/sessions/sync', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ session })
-    })
-      .then(res => {
-        if (res.ok) {
-          console.log(`[ServerSync] Successfully confirmed server storage for session: id=${session.id}`);
-        } else {
-          console.warn(`[ServerSync] Server response non-OK (${res.status}) for session: id=${session.id}`);
-        }
-      })
-      .catch((err) => console.warn('[ServerSync] Failed to sync session with server:', err));
+    }).catch((err) => console.warn('[ServerSync] Failed to sync session with server:', err));
   };
 
   const startNewInterview = (position: Position, candidateInfo: CandidateInfo) => {
@@ -164,23 +82,7 @@ export default function App() {
       date: new Date().toISOString()
     };
 
-    console.log(`[SessionLifecycle] Starting new interview: id=${newSession.id}, position=${position}, candidate=${candidateInfo.name}`);
-
-    setSessions(prev => {
-      const local = getMergedLocalSessions();
-      const localBeforeLen = local.length;
-      const merged = mergeSessionLists([newSession], mergeSessionLists(prev, local));
-      try {
-        console.log(`[LocalStorage:startNewInterview] Initiating write: localBeforeLength = ${localBeforeLen}, mergedLengthBeforeWrite = ${merged.length}`);
-        localStorage.setItem(STORAGE_KEY, JSON.stringify(merged));
-        const verifiedLength = getMergedLocalSessions().length;
-        console.log(`[LocalStorage:startNewInterview] Write verified successfully: array length in storage after write = ${verifiedLength}`);
-      } catch (e) {
-        console.warn('Unable to write to localStorage in startNewInterview:', e);
-      }
-      return merged;
-    });
-
+    setSessions(prev => [newSession, ...prev]);
     syncSessionToServer(newSession);
     setCurrentSessionId(newSession.id);
     setShowDashboard(false);
@@ -188,30 +90,13 @@ export default function App() {
 
   const updateSession = (updatedSession: InterviewSession) => {
     setSessions(prev => {
-      const local = getMergedLocalSessions();
-      const localBeforeLen = local.length;
-      const base = mergeSessionLists(prev, local);
-      const exists = base.some(s => s.id === updatedSession.id);
-
-      if (exists) {
-        console.log(`[SessionLifecycle] Updating existing session record: id=${updatedSession.id}, messagesCount=${updatedSession.messages?.length || 0}, status=${updatedSession.status}`);
-      } else {
-        console.log(`[SessionLifecycle] Appending non-existent session record into active sessions: id=${updatedSession.id}`);
+      const idx = prev.findIndex(s => s.id === updatedSession.id);
+      if (idx >= 0) {
+        const next = [...prev];
+        next[idx] = updatedSession;
+        return next;
       }
-
-      const merged = base.map(s => s.id === updatedSession.id ? updatedSession : s);
-      if (!exists) {
-        merged.unshift(updatedSession);
-      }
-      try {
-        console.log(`[LocalStorage:updateSession] Initiating write: localBeforeLength = ${localBeforeLen}, mergedLengthBeforeWrite = ${merged.length}`);
-        localStorage.setItem(STORAGE_KEY, JSON.stringify(merged));
-        const verifiedLength = getMergedLocalSessions().length;
-        console.log(`[LocalStorage:updateSession] Write verified successfully: array length in storage after write = ${verifiedLength}`);
-      } catch (e) {
-        console.warn('Unable to write to localStorage in updateSession:', e);
-      }
-      return merged;
+      return [updatedSession, ...prev];
     });
 
     syncSessionToServer(updatedSession);
@@ -273,7 +158,7 @@ export default function App() {
         <Welcome 
           onSelectPosition={startNewInterview} 
           onOpenDashboard={handleOpenStaffPortal} 
-          hasSessions={true}
+          hasSessions={sessions.length > 0}
         />
       ) : (
         <Interview 
@@ -292,6 +177,3 @@ export default function App() {
     </>
   );
 }
-
-
-

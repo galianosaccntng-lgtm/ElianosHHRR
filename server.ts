@@ -5,58 +5,174 @@ import { createServer as createViteServer } from "vite";
 import { GoogleGenAI } from "@google/genai";
 import dotenv from "dotenv";
 import nodemailer from "nodemailer";
+import { Firestore } from "@google-cloud/firestore";
 
 dotenv.config();
 
 const app = express();
-app.use(express.json());
 
-const PORT = 3000;
-const ADMIN_PASSCODE = "***REMOVED***";
+// Protect endpoints with payload size limits
+app.use(express.json({ limit: "1mb" }));
 
-// Persistent server storage directory & file for Candidate Interviews
+const PORT = Number(process.env.PORT) || 3000;
+const ADMIN_PASSCODE = process.env.ADMIN_PASSCODE || "";
+
+// In-memory rate limiting mechanism per IP + route
+interface RateLimitRecord {
+  count: number;
+  resetTime: number;
+}
+const rateLimitStore = new Map<string, RateLimitRecord>();
+
+function createRateLimiter(windowMs: number, maxRequests: number, message: string) {
+  return (req: express.Request, res: express.Response, next: express.NextFunction) => {
+    const ip = req.ip || req.socket.remoteAddress || "unknown";
+    const key = `${ip}:${req.originalUrl || req.baseUrl || req.path}`;
+    const now = Date.now();
+
+    const record = rateLimitStore.get(key);
+    if (!record || now > record.resetTime) {
+      rateLimitStore.set(key, { count: 1, resetTime: now + windowMs });
+      return next();
+    }
+
+    if (record.count >= maxRequests) {
+      return res.status(429).json({ error: message });
+    }
+
+    record.count += 1;
+    return next();
+  };
+}
+
+const adminVerifyLimiter = createRateLimiter(15 * 60 * 1000, 5, "Too many admin verification attempts. Please try again in 15 minutes.");
+const chatLimiter = createRateLimiter(60 * 1000, 30, "Too many chat requests. Please slow down.");
+const sessionSyncLimiter = createRateLimiter(60 * 1000, 60, "Too many sync requests. Please slow down.");
+const evaluateLimiter = createRateLimiter(10 * 60 * 1000, 5, "Too many evaluation requests. Please wait before submitting again.");
+
+// Centralized admin authentication verification helper
+function verifyAdminAccess(provided: string | undefined, res: express.Response): boolean {
+  if (!ADMIN_PASSCODE) {
+    res.status(503).json({ error: "Admin access is not configured" });
+    return false;
+  }
+  if (!provided || provided !== ADMIN_PASSCODE) {
+    res.status(401).json({ error: "Contraseña incorrecta. Acceso denegado." });
+    return false;
+  }
+  return true;
+}
+
+// Local fallback storage directory & file
 const DATA_DIR = path.join(process.cwd(), "data");
 const SESSIONS_FILE = path.join(DATA_DIR, "interviews.json");
 
-if (!fs.existsSync(DATA_DIR)) {
-  fs.mkdirSync(DATA_DIR, { recursive: true });
-}
-if (!fs.existsSync(SESSIONS_FILE)) {
-  fs.writeFileSync(SESSIONS_FILE, JSON.stringify([]), "utf-8");
+function ensureLocalDataFile() {
+  if (!fs.existsSync(DATA_DIR)) {
+    fs.mkdirSync(DATA_DIR, { recursive: true });
+  }
+  if (!fs.existsSync(SESSIONS_FILE)) {
+    fs.writeFileSync(SESSIONS_FILE, JSON.stringify([]), "utf-8");
+  }
 }
 
-function getStoredSessions(): any[] {
+// Initialize Firestore if on Cloud Run or explicitly enabled
+let firestoreClient: Firestore | null = null;
+const isFirestoreEnabled = Boolean(process.env.K_SERVICE || process.env.FIRESTORE_ENABLED === "true");
+
+if (isFirestoreEnabled) {
+  try {
+    firestoreClient = new Firestore();
+    console.log("[Storage] Initialized Firestore persistence (collection: 'interviews')");
+  } catch (fsErr) {
+    console.warn("[Storage] Could not initialize Firestore client, fallback to local storage:", fsErr);
+    firestoreClient = null;
+  }
+}
+
+function getLocalSessions(): any[] {
+  ensureLocalDataFile();
   try {
     const raw = fs.readFileSync(SESSIONS_FILE, "utf-8");
     return JSON.parse(raw);
   } catch (err) {
-    console.error("Error reading stored sessions:", err);
+    console.error("[LocalStorage] Error reading local file:", err);
     return [];
   }
 }
 
-function saveStoredSessions(sessions: any[]) {
+function saveLocalSessions(sessions: any[]) {
+  ensureLocalDataFile();
   try {
     fs.writeFileSync(SESSIONS_FILE, JSON.stringify(sessions, null, 2), "utf-8");
   } catch (err) {
-    console.error("Error writing stored sessions:", err);
+    console.error("[LocalStorage] Error writing local file:", err);
   }
 }
 
-function upsertSession(session: any) {
+// Unified Async Storage layer (Firestore with automatic Local Fallback)
+async function getStoredSessions(): Promise<any[]> {
+  if (firestoreClient) {
+    try {
+      const snapshot = await firestoreClient.collection("interviews").get();
+      const sessions: any[] = [];
+      snapshot.forEach((doc) => {
+        sessions.push(doc.data());
+      });
+      return sessions.sort((a, b) => {
+        const tA = a.date ? new Date(a.date).getTime() : 0;
+        const tB = b.date ? new Date(b.date).getTime() : 0;
+        return tB - tA;
+      });
+    } catch (fsErr) {
+      console.warn("[Storage] Firestore read failed, falling back to local file:", fsErr);
+    }
+  }
+  return getLocalSessions();
+}
+
+async function upsertSession(session: any): Promise<void> {
   if (!session || !session.id) return;
-  const sessions = getStoredSessions();
   const safeSession = {
     ...session,
     date: session.date || new Date().toISOString(),
   };
+
+  if (firestoreClient) {
+    try {
+      await firestoreClient.collection("interviews").doc(safeSession.id).set(safeSession, { merge: true });
+      return;
+    } catch (fsErr) {
+      console.warn("[Storage] Firestore write failed, falling back to local file:", fsErr);
+    }
+  }
+
+  // Local fallback
+  const sessions = getLocalSessions();
   const idx = sessions.findIndex((s) => s.id === safeSession.id);
   if (idx >= 0) {
     sessions[idx] = { ...sessions[idx], ...safeSession };
   } else {
     sessions.unshift(safeSession);
   }
-  saveStoredSessions(sessions);
+  saveLocalSessions(sessions);
+}
+
+async function deleteStoredSession(id: string): Promise<number> {
+  if (firestoreClient) {
+    try {
+      await firestoreClient.collection("interviews").doc(id).delete();
+      const snapshot = await firestoreClient.collection("interviews").count().get();
+      return snapshot.data().count;
+    } catch (fsErr) {
+      console.warn("[Storage] Firestore delete failed, falling back to local file:", fsErr);
+    }
+  }
+
+  let sessions = getLocalSessions();
+  sessions = sessions.filter((s) => s.id !== id);
+  saveLocalSessions(sessions);
+  return sessions.length;
 }
 
 // Initialize Gemini API
@@ -69,14 +185,13 @@ const ai = new GoogleGenAI({
   },
 });
 
-// Comprehensive, verified active fallback models list prioritized by performance and distinct quota pools
+// Valid Gemini models prioritized by performance
 const RESILIENT_MODELS_POOL = [
-  "gemini-3.1-flash-lite",
-  "gemini-3.7-flash",
   "gemini-flash-latest",
+  "gemini-flash-lite-latest",
+  "gemini-2.5-flash",
 ];
 
-// Local intelligent interview engine fallback for when all remote API quotas are temporarily exhausted
 const INTERVIEW_QUESTIONS: Record<string, string[]> = {
   "Barista": [
     "What made you interested in applying for a Barista position with Ellianos Coffee?",
@@ -143,52 +258,25 @@ function generateLocalInterviewResponse(position: string, history: any[], candid
   return `Thank you for sharing that, ${candidateName}. That gives us great insight into how you work.\n\n**${nextQuestion}**`;
 }
 
+// Honest fallback evaluation without invented scores or fake HR signatures
 function generateLocalEvaluation(session: any): string {
   const { position, candidateInfo, messages } = session;
   const candidateName = candidateInfo?.name || "Candidate";
-  const userResponses = messages.filter((m: any) => m.role === "user");
+  const userResponses = (messages || []).filter((m: any) => m.role === "user");
   const totalAnswers = userResponses.length;
-  
-  // Calculate score based on completion and response depth
-  let score = 70;
-  if (totalAnswers >= 6) score = 88;
-  else if (totalAnswers >= 4) score = 82;
-  else if (totalAnswers >= 2) score = 75;
-  else score = 60;
 
-  const recommendation = score >= 80 ? "Hire" : score >= 70 ? "Second Interview" : "Do Not Hire";
-
-  return `# Candidate Interview Evaluation
+  return `# Candidate Interview Record (Manual Review Required)
 
 **Candidate Name:** ${candidateName}  
-**Position:** ${position}, Ellianos Coffee (Lehigh Acres, FL)  
+**Position:** ${position || "Barista"}, Ellianos Coffee (Lehigh Acres, FL)  
 **Contact:** ${candidateInfo?.phone || "N/A"} | ${candidateInfo?.email || "N/A"}  
-**Evaluator:** Senior HR Management Team  
+**Date:** ${new Date().toLocaleDateString()}  
+**Responses Captured:** ${totalAnswers}  
 
 ---
 
-### 1. Final Score: ${score} / 100
-*(Score evaluated across speed disposition, customer service mindset, multitasking logic, and overall role alignment).*
-
----
-
-### 2. Summary of Strengths
-* **Role Alignment:** Demonstrated clear motivation and interest in representing the Ellianos Coffee brand at Lehigh Acres.
-* **Customer Focus:** Displayed a helpful attitude and proactive approach to customer service in a high-volume drive-thru.
-* **Communication:** Clear, respectful, and articulate interaction throughout the interview flow.
-
----
-
-### 3. Summary of Weaknesses & Areas of Concern
-* **Drive-thru Pace Verification:** Recommend hands-on orientation to ensure rapid adaptation to the double drive-thru speed standard.
-* **Peak Rush Prioritization:** Follow-up recommended during store onboarding regarding headset communication and window multitasking.
-
----
-
-### 4. Final Recommendation
-**Recommendation:** **${recommendation}**
-
-**HR Note:** ${candidateName} has completed the structured interview assessment for ${position}. The profile demonstrates good baseline fit for Ellianos Coffee operations.`;
+### AI Evaluation Status: Unavailable
+La evaluación con IA no estaba disponible en el momento del envío. No se generó puntaje ni recomendación automática. Por favor revise la transcripción completa manualmente para evaluar la idoneidad del candidato.`;
 }
 
 async function generateContentWithInfiniteResilience(request: any) {
@@ -202,7 +290,6 @@ async function generateContentWithInfiniteResilience(request: any) {
     try {
       console.log(`[AI Engine] Dispatching request with model: ${model}`);
       
-      // Execute request with 10s timeout window
       const requestPromise = ai.models.generateContent(currentRequest);
       const timeoutPromise = new Promise((_, reject) =>
         setTimeout(() => reject(new Error(`Timeout: ${model} exceeded 10000ms response window`)), 10000)
@@ -218,7 +305,6 @@ async function generateContentWithInfiniteResilience(request: any) {
       const errorMsg = error?.message || error?.status || "API Error";
       console.log(`[AI Engine] Model ${model} unavailable (${errorMsg}). Trying next fallback...`);
       
-      // Check if retryDelay was provided in seconds (e.g. "1s", "2s")
       const retryDelayStr = error?.error?.details?.find?.((d: any) => d?.retryDelay)?.retryDelay || error?.details?.[0]?.retryDelay;
       if (retryDelayStr && typeof retryDelayStr === "string") {
         const seconds = parseInt(retryDelayStr.replace(/[^0-9]/g, ""), 10);
@@ -231,8 +317,7 @@ async function generateContentWithInfiniteResilience(request: any) {
     }
   }
 
-  // If all cloud models hit quota exhaustion, throw so caller can use seamless fallback
-  throw new Error(`AI Engine Quota Exceeded`);
+  throw lastError || new Error(`AI Engine Quota Exceeded`);
 }
 
 function getMailTransporter() {
@@ -247,59 +332,71 @@ function getMailTransporter() {
   });
 }
 
-// Session sync endpoints (stores & retrieves live progress & records on server)
-app.get("/api/sessions", (req, res) => {
-  try {
-    const sessions = getStoredSessions();
-    res.json({ sessions });
-  } catch (err: any) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-app.post("/api/sessions/sync", (req, res) => {
+// Single candidate live session sync endpoint (Protected with validation & rate limiting)
+app.post("/api/sessions/sync", sessionSyncLimiter, async (req, res) => {
   try {
     const { session } = req.body;
-    if (session && session.id) {
-      upsertSession(session);
+    
+    // Strict schema & boundary validation
+    if (!session || typeof session !== "object") {
+      return res.status(400).json({ error: "Invalid session payload" });
     }
+
+    const { id, messages } = session;
+    if (typeof id !== "string" || !id.trim() || id.length > 100 || id.includes("/") || id === "." || id === "..") {
+      return res.status(400).json({ error: "Invalid session ID format" });
+    }
+
+    if (messages !== undefined) {
+      if (!Array.isArray(messages) || messages.length > 200) {
+        return res.status(400).json({ error: "Invalid session messages payload" });
+      }
+    }
+
+    await upsertSession(session);
     res.json({ success: true });
   } catch (err: any) {
-    res.status(500).json({ error: err.message });
+    console.error("[SessionSync] Error syncing session:", err);
+    res.status(500).json({ error: err.message || "Internal server error" });
   }
 });
 
-// RRHH Staff Protected Endpoints (Password: ***REMOVED***)
-app.post("/api/admin/verify", (req, res) => {
-  const { passcode } = req.body;
-  if (passcode === ADMIN_PASSCODE) {
-    return res.json({ authenticated: true });
-  }
-  return res.status(401).json({ authenticated: false, error: "Contraseña incorrecta. Acceso denegado." });
+// RRHH Staff Protected Endpoints
+app.post("/api/admin/verify", adminVerifyLimiter, (req, res) => {
+  const { passcode } = req.body || {};
+  if (!verifyAdminAccess(passcode, res)) return;
+  return res.json({ authenticated: true });
 });
 
-app.get("/api/admin/sessions", (req, res) => {
-  const authHeader = req.headers["x-admin-passcode"];
-  if (authHeader !== ADMIN_PASSCODE) {
-    return res.status(401).json({ error: "Unauthorized access" });
+app.get("/api/admin/sessions", async (req, res) => {
+  const authHeader = req.headers["x-admin-passcode"] as string | undefined;
+  if (!verifyAdminAccess(authHeader, res)) return;
+
+  try {
+    const sessions = await getStoredSessions();
+    res.json({ sessions });
+  } catch (err: any) {
+    console.error("[Admin] Error retrieving sessions:", err);
+    res.status(500).json({ error: "Failed to retrieve sessions" });
   }
-  const sessions = getStoredSessions();
-  res.json({ sessions });
 });
 
-app.delete("/api/admin/sessions/:id", (req, res) => {
-  const authHeader = req.headers["x-admin-passcode"];
-  if (authHeader !== ADMIN_PASSCODE) {
-    return res.status(401).json({ error: "Unauthorized access" });
-  }
+app.delete("/api/admin/sessions/:id", async (req, res) => {
+  const authHeader = req.headers["x-admin-passcode"] as string | undefined;
+  if (!verifyAdminAccess(authHeader, res)) return;
+
   const { id } = req.params;
-  let sessions = getStoredSessions();
-  sessions = sessions.filter((s) => s.id !== id);
-  saveStoredSessions(sessions);
-  res.json({ success: true, remaining: sessions.length });
+  try {
+    const remaining = await deleteStoredSession(id);
+    res.json({ success: true, remaining });
+  } catch (err: any) {
+    console.error("[Admin] Error deleting session:", err);
+    res.status(500).json({ error: "Failed to delete session" });
+  }
 });
 
-app.post("/api/chat", async (req, res) => {
+// Candidate Live Chat Endpoint
+app.post("/api/chat", chatLimiter, async (req, res) => {
   try {
     const { position, history, candidateInfo } = req.body;
 
@@ -339,7 +436,6 @@ TONE: Professional, welcoming, and encouraging, yet rigorous. Guide them from ba
     let responseText = "";
     try {
       const response = await generateContentWithInfiniteResilience({
-        model: "gemini-3.1-flash-lite",
         contents: history,
         config: {
           systemInstruction,
@@ -361,18 +457,18 @@ TONE: Professional, welcoming, and encouraging, yet rigorous. Guide them from ba
   }
 });
 
-app.post("/api/evaluate-and-send", async (req, res) => {
+// Candidate Evaluation and Final Submission Endpoint
+app.post("/api/evaluate-and-send", evaluateLimiter, async (req, res) => {
   try {
     const { session } = req.body;
-    if (!session || !session.candidateInfo) {
-      return res.status(400).json({ error: "Invalid session data received." });
+    if (!session || !session.candidateInfo || !session.id) {
+      return res.status(400).json({ success: false, error: "Invalid session data received." });
     }
 
     const { position, candidateInfo, messages } = session;
 
     let evaluationText = "";
     try {
-      // Use Gemini to evaluate the interview
       const prompt = `You are a Senior HR Manager reviewing an interview transcript for the position of ${position} at Ellianos Coffee.
 Candidate Name: ${candidateInfo.name}
 Phone: ${candidateInfo.phone}
@@ -388,11 +484,10 @@ You must include:
 4. A final recommendation (Hire, Do Not Hire, or Second Interview).
 
 Transcript:
-${messages.map((m: any) => `[${(m.role || "USER").toUpperCase()}]: ${m.parts?.[0]?.text || ""}`).join("\n\n")}
+${(messages || []).map((m: any) => `[${(m.role || "USER").toUpperCase()}]: ${m.parts?.[0]?.text || ""}`).join("\n\n")}
 `;
 
       const response = await generateContentWithInfiniteResilience({
-        model: "gemini-3.1-flash-lite",
         contents: prompt,
         config: {
           temperature: 0.2,
@@ -400,7 +495,7 @@ ${messages.map((m: any) => `[${(m.role || "USER").toUpperCase()}]: ${m.parts?.[0
       });
       evaluationText = response?.text || "";
     } catch (evalError) {
-      console.warn("[AI Engine] Cloud evaluation quota exceeded. Generating deterministic rubric evaluation:", evalError);
+      console.warn("[AI Engine] Cloud evaluation quota exceeded. Using honest fallback evaluation:", evalError);
       evaluationText = generateLocalEvaluation(session);
     }
 
@@ -417,35 +512,33 @@ ${messages.map((m: any) => `[${(m.role || "USER").toUpperCase()}]: ${m.parts?.[0
           from: process.env.EMAIL_USER,
           to: "accounting@jjpartnersco.com",
           subject: `New Interview Application: ${candidateInfo.name} - ${position}`,
-          text: `Candidate: ${candidateInfo.name}\nEmail: ${candidateInfo.email}\nPhone: ${candidateInfo.phone}\nPosition: ${position}\n\n=== AI EVALUATION ===\n${evaluationText}\n\n=== TRANSCRIPT ===\n${messages.map((m: any) => `[${(m.role || "USER").toUpperCase()}]: ${m.parts?.[0]?.text || ""}`).join("\n\n")}`,
+          text: `Candidate: ${candidateInfo.name}\nEmail: ${candidateInfo.email}\nPhone: ${candidateInfo.phone}\nPosition: ${position}\n\n=== AI EVALUATION ===\n${evaluationText}\n\n=== TRANSCRIPT ===\n${(messages || []).map((m: any) => `[${(m.role || "USER").toUpperCase()}]: ${m.parts?.[0]?.text || ""}`).join("\n\n")}`,
         };
 
         await transporter.sendMail(mailOptions);
         emailSent = true;
-        console.log(`[Email Service] Evaluation email dispatched successfully to accounting@jjpartnersco.com for candidate: ${candidateInfo.name}`);
+        console.log(`[Email Service] Evaluation email dispatched successfully for candidate: ${candidateInfo.name}`);
       } catch (mailErr: any) {
         console.warn(`[Email Service] Email delivery skipped/failed: ${mailErr.message || mailErr}`);
       }
-    } else {
-      console.log(`[Email Service] EMAIL_USER / EMAIL_PASS not configured in environment variables. Candidate evaluation saved locally.`);
     }
 
-    // Persist completed evaluation and updated session directly on server
+    // Persist completed evaluation and updated session
     try {
-      upsertSession({
+      await upsertSession({
         ...session,
         status: "Completed",
         evaluation: evaluationText,
         emailSent,
       });
     } catch (saveErr) {
-      console.warn("Failed to persist session locally:", saveErr);
+      console.warn("[Storage] Failed to persist completed session:", saveErr);
     }
 
     res.json({ success: true, evaluation: evaluationText, emailSent });
   } catch (error: any) {
     console.error("Error evaluating application:", error);
-    res.status(500).json({ error: error.message || "An error occurred during evaluation." });
+    res.status(500).json({ success: false, error: error.message || "An error occurred during evaluation." });
   }
 });
 
@@ -470,4 +563,3 @@ async function startServer() {
 }
 
 startServer();
-

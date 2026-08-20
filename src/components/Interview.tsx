@@ -158,13 +158,17 @@ export function Interview({ session, onBack, onUpdateSession }: InterviewProps) 
       });
       
       const result = await response.json().catch(() => ({}));
+
+      if (!response.ok || !result.success) {
+        throw new Error(result.error || 'No se pudo enviar la solicitud al servidor. Inténtelo de nuevo.');
+      }
       
-      // Update session as completed with evaluation
+      // Update session as completed with evaluation only after verified server response
       onUpdateSession({
         ...session,
         status: 'Completed',
         evaluation: result.evaluation || undefined,
-        emailSent: result.emailSent ?? true
+        emailSent: result.emailSent ?? false
       });
       
       // Trigger Confetti Celebration
@@ -196,7 +200,7 @@ export function Interview({ session, onBack, onUpdateSession }: InterviewProps) 
       setIsSuccess(true);
     } catch (err: any) {
       console.error('Submission error:', err);
-      setErrorMessage('Submission issue encountered. Please press Submit again to retry.');
+      setErrorMessage(err.message || 'Submission issue encountered. Please press Submit again to retry.');
     } finally {
       setIsSubmitting(false);
     }
