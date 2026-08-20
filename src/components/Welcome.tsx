@@ -1,26 +1,59 @@
 import React, { useState } from 'react';
-import { Position, CandidateInfo } from '../types';
-import { Coffee, MapPin, LayoutDashboard, ChevronRight, Check, Sparkles, Lock } from 'lucide-react';
+import { Position, CandidateInfo, InterviewSession } from '../types';
+import { Coffee, MapPin, LayoutDashboard, ChevronRight, Check, Sparkles, Lock, Loader2 } from 'lucide-react';
+import { ResumeInterviewModal } from './ResumeInterviewModal';
 import clsx from 'clsx';
 
 interface WelcomeProps {
   onSelectPosition: (position: Position, candidateInfo: CandidateInfo) => void;
+  onResumeSession: (session: InterviewSession) => void;
   onOpenDashboard: () => void;
   hasSessions: boolean;
 }
 
-export function Welcome({ onSelectPosition, onOpenDashboard, hasSessions }: WelcomeProps) {
+export function Welcome({ onSelectPosition, onResumeSession, onOpenDashboard, hasSessions }: WelcomeProps) {
   const [step, setStep] = useState<'intro' | 'form'>('intro');
   const [name, setName] = useState('');
   const [phone, setPhone] = useState('');
   const [email, setEmail] = useState('');
   const [position, setPosition] = useState<Position>(null);
+  const [isCheckingResume, setIsCheckingResume] = useState(false);
+  const [resumableSession, setResumableSession] = useState<InterviewSession | null>(null);
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (name && phone && email && position) {
-      onSelectPosition(position, { name, phone, email });
+    if (!name.trim() || !phone.trim() || !email.trim() || !position || isCheckingResume) return;
+
+    const candidateInfo: CandidateInfo = {
+      name: name.trim(),
+      phone: phone.trim(),
+      email: email.trim(),
+    };
+
+    setIsCheckingResume(true);
+    try {
+      const res = await fetch('/api/sessions/find-incomplete', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(candidateInfo),
+      });
+
+      if (res.ok) {
+        const data = await res.json().catch(() => ({}));
+        if (data && data.found && data.session && Array.isArray(data.session.messages)) {
+          setResumableSession(data.session);
+          setIsCheckingResume(false);
+          return;
+        }
+      }
+    } catch (err) {
+      console.warn('[Welcome] Could not query incomplete session:', err);
+    } finally {
+      setIsCheckingResume(false);
     }
+
+    // Default flow: start fresh interview
+    onSelectPosition(position, candidateInfo);
   };
 
   const isFormValid = name.trim() !== '' && phone.trim() !== '' && email.trim() !== '' && position !== null;
@@ -176,10 +209,18 @@ export function Welcome({ onSelectPosition, onOpenDashboard, hasSessions }: Welc
                     </button>
                     <button
                       type="submit"
-                      disabled={!isFormValid}
+                      disabled={!isFormValid || isCheckingResume}
                       className="flex items-center gap-2 bg-[#4B2C20] text-[#FAF7F2] px-8 py-4 rounded-xl font-bold text-xs uppercase tracking-widest hover:bg-[#3E2723] disabled:opacity-50 disabled:hover:bg-[#4B2C20] disabled:transform-none transition-all shadow-md hover:shadow-lg hover:-translate-y-0.5"
                     >
-                      Begin Interview <ChevronRight className="w-4 h-4" />
+                      {isCheckingResume ? (
+                        <>
+                          <Loader2 className="w-4 h-4 animate-spin text-[#D4A373]" /> Checking...
+                        </>
+                      ) : (
+                        <>
+                          Begin Interview <ChevronRight className="w-4 h-4" />
+                        </>
+                      )}
                     </button>
                   </div>
                 </div>
@@ -189,6 +230,30 @@ export function Welcome({ onSelectPosition, onOpenDashboard, hasSessions }: Welc
         </div>
       </div>
       
+      {/* Resume Interview Modal */}
+      {resumableSession && (
+        <ResumeInterviewModal
+          session={resumableSession}
+          selectedPosition={position}
+          candidateName={name.trim()}
+          onContinue={(sessionToResume) => {
+            setResumableSession(null);
+            onResumeSession(sessionToResume);
+          }}
+          onStartNew={() => {
+            setResumableSession(null);
+            if (position) {
+              onSelectPosition(position, {
+                name: name.trim(),
+                phone: phone.trim(),
+                email: email.trim(),
+              });
+            }
+          }}
+          onClose={() => setResumableSession(null)}
+        />
+      )}
+
       {/* Footer Credit */}
       <div className="w-full text-center py-6 mt-auto">
         <p className="text-[10px] uppercase tracking-[0.3em] font-bold text-[#4B2C20]/40">

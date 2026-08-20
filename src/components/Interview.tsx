@@ -20,7 +20,7 @@ export function Interview({ session, onBack, onUpdateSession }: InterviewProps) 
   
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
-  const hasInitialized = useRef(false);
+  const lastInitSessionId = useRef<string | null>(null);
 
   // Scroll to bottom when messages change
   useEffect(() => {
@@ -82,12 +82,16 @@ export function Interview({ session, onBack, onUpdateSession }: InterviewProps) 
     }
   };
 
-  // Initial greeting
+  // Initial greeting - only run if messages array is empty
   useEffect(() => {
-    if (session.messages.length > 0 || hasInitialized.current) return;
-    hasInitialized.current = true;
+    if (session.messages && session.messages.length > 0) {
+      lastInitSessionId.current = session.id;
+      return;
+    }
+    if (lastInitSessionId.current === session.id) return;
+    lastInitSessionId.current = session.id;
     initChat();
-  }, [session.id]);
+  }, [session.id, session.messages?.length]);
 
   const handleSend = async (e?: React.FormEvent) => {
     if (e) e.preventDefault();

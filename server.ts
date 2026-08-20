@@ -57,6 +57,7 @@ const chatLimiter = createRateLimiter(60 * 1000, 30, "Too many chat requests. Pl
 const sessionSyncLimiter = createRateLimiter(60 * 1000, 60, "Too many sync requests. Please slow down.");
 const evaluateLimiter = createRateLimiter(10 * 60 * 1000, 5, "Too many evaluation requests. Please wait before submitting again.");
 const adminFollowUpLimiter = createRateLimiter(60 * 60 * 1000, 10, "Too many follow-up emails sent. Please try again later (maximum 10 per hour).");
+const findIncompleteLimiter = createRateLimiter(15 * 60 * 1000, 10, "Too many search requests. Please try again in 15 minutes.");
 
 // Centralized admin authentication verification helper
 function verifyAdminAccess(provided: string | undefined, res: express.Response): boolean {
@@ -366,6 +367,58 @@ app.post("/api/sessions/sync", sessionSyncLimiter, async (req, res) => {
   } catch (err: any) {
     console.error("[SessionSync] Error syncing session:", err);
     res.status(500).json({ error: err.message || "Internal server error" });
+  }
+});
+
+// Candidate resume lookup endpoint for incomplete applications
+app.post("/api/sessions/find-incomplete", findIncompleteLimiter, async (req, res) => {
+  try {
+    const { name, phone, email } = req.body || {};
+
+    if (
+      typeof name !== "string" || !name.trim() ||
+      typeof phone !== "string" || !phone.trim() ||
+      typeof email !== "string" || !email.trim()
+    ) {
+      return res.status(400).json({ success: false, error: "Name, phone, and email are required" });
+    }
+
+    const normalizedEmail = email.trim().toLowerCase();
+    const normalizedPhone = phone.replace(/\D/g, "");
+
+    if (!normalizedPhone || !normalizedEmail) {
+      return res.json({ found: false });
+    }
+
+    const sessions = await getStoredSessions();
+    const matched = sessions.filter((s: any) => {
+      if (!s || s.status === "Completed") return false;
+      if (!s.candidateInfo) return false;
+      const sEmail = (s.candidateInfo.email || "").trim().toLowerCase();
+      const sPhone = (s.candidateInfo.phone || "").replace(/\D/g, "");
+      return sEmail === normalizedEmail && sPhone === normalizedPhone;
+    });
+
+    if (matched.length === 0) {
+      return res.json({ found: false });
+    }
+
+    // Sort by date descending to pick the most recent
+    matched.sort((a: any, b: any) => {
+      const tA = a.date ? new Date(a.date).getTime() : 0;
+      const tB = b.date ? new Date(b.date).getTime() : 0;
+      return tB - tA;
+    });
+
+    const session = matched[0];
+    if (!session || !session.id || !Array.isArray(session.messages)) {
+      return res.json({ found: false });
+    }
+
+    return res.json({ found: true, session });
+  } catch (err: any) {
+    console.error("[FindIncomplete] Error:", err);
+    return res.json({ found: false });
   }
 });
 

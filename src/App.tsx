@@ -88,6 +88,20 @@ export default function App() {
     setShowDashboard(false);
   };
 
+  const resumeExistingSession = (existingSession: InterviewSession) => {
+    setSessions(prev => {
+      const idx = prev.findIndex(s => s.id === existingSession.id);
+      if (idx >= 0) {
+        const next = [...prev];
+        next[idx] = existingSession;
+        return next;
+      }
+      return [existingSession, ...prev];
+    });
+    setCurrentSessionId(existingSession.id);
+    setShowDashboard(false);
+  };
+
   const updateSession = (updatedSession: InterviewSession) => {
     setSessions(prev => {
       const idx = prev.findIndex(s => s.id === updatedSession.id);
@@ -157,6 +171,7 @@ export default function App() {
       {!currentSession ? (
         <Welcome 
           onSelectPosition={startNewInterview} 
+          onResumeSession={resumeExistingSession}
           onOpenDashboard={handleOpenStaffPortal} 
           hasSessions={sessions.length > 0}
         />
