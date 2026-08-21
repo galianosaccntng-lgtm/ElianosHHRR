@@ -11,6 +11,7 @@ import { humanConfidence } from "./src/authenticity";
 dotenv.config();
 
 const app = express();
+app.set("trust proxy", true);
 
 // Protect endpoints with payload size limits
 app.use(express.json({ limit: "1mb" }));

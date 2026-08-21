@@ -63,13 +63,28 @@ export default function App() {
     }
   }, [currentSessionId]);
 
-  // Sync candidate's own session to server
-  const syncSessionToServer = (session: InterviewSession) => {
+  // Sync candidate's own session to server with a single retry on failure
+  const syncSessionToServer = (session: InterviewSession, isRetry = false) => {
     fetch('/api/sessions/sync', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ session })
-    }).catch((err) => console.warn('[ServerSync] Failed to sync session with server:', err));
+    })
+      .then((res) => {
+        if (!res.ok && !isRetry) {
+          setTimeout(() => {
+            syncSessionToServer(session, true);
+          }, 5000);
+        }
+      })
+      .catch((err) => {
+        console.warn('[ServerSync] Failed to sync session with server:', err);
+        if (!isRetry) {
+          setTimeout(() => {
+            syncSessionToServer(session, true);
+          }, 5000);
+        }
+      });
   };
 
   const startNewInterview = (position: Position, candidateInfo: CandidateInfo) => {
