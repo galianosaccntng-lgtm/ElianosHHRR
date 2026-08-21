@@ -86,18 +86,31 @@ function ensureLocalDataFile() {
   }
 }
 
-// Initialize Firestore if on Cloud Run or explicitly enabled
-let firestoreClient: Firestore | null = null;
-const isFirestoreEnabled = Boolean(process.env.K_SERVICE || process.env.FIRESTORE_ENABLED === "true");
-
-if (isFirestoreEnabled) {
-  try {
-    firestoreClient = new Firestore();
-    console.log("[Storage] Initialized Firestore persistence (collection: 'interviews')");
-  } catch (fsErr) {
-    console.warn("[Storage] Could not initialize Firestore client, fallback to local storage:", fsErr);
-    firestoreClient = null;
+// Load firebase config if available
+let firebaseConfig: any = null;
+try {
+  if (fs.existsSync(path.join(process.cwd(), "firebase-applet-config.json"))) {
+    firebaseConfig = JSON.parse(fs.readFileSync(path.join(process.cwd(), "firebase-applet-config.json"), "utf-8"));
   }
+} catch (e) {
+  console.warn("[Storage] Could not read firebase-applet-config.json:", e);
+}
+
+// Initialize Firestore for durable Cloud persistence across all environments
+let firestoreClient: Firestore | null = null;
+try {
+  const options: any = {};
+  if (firebaseConfig?.projectId) {
+    options.projectId = firebaseConfig.projectId;
+  }
+  if (firebaseConfig?.firestoreDatabaseId) {
+    options.databaseId = firebaseConfig.firestoreDatabaseId;
+  }
+  firestoreClient = new Firestore(options);
+  console.log(`[Storage] Initialized Cloud Firestore persistence (Project: ${firebaseConfig?.projectId || 'default'}, DB: ${firebaseConfig?.firestoreDatabaseId || '(default)'})`);
+} catch (fsErr) {
+  console.warn("[Storage] Could not initialize Firestore client, fallback to local storage:", fsErr);
+  firestoreClient = null;
 }
 
 function getLocalSessions(): any[] {
@@ -120,7 +133,27 @@ function saveLocalSessions(sessions: any[]) {
   }
 }
 
-// Unified Async Storage layer (Firestore with automatic Local Fallback)
+// Unified Async Storage layer (Firestore with automatic Local Fallback & Two-way sync)
+async function syncLocalToFirestoreIfEmpty() {
+  if (!firestoreClient) return;
+  try {
+    const snapshot = await firestoreClient.collection("interviews").limit(1).get();
+    if (snapshot.empty) {
+      const local = getLocalSessions();
+      if (local.length > 0) {
+        console.log(`[Storage] Seeding ${local.length} existing local interviews to Cloud Firestore...`);
+        for (const item of local) {
+          await firestoreClient.collection("interviews").doc(item.id).set(item, { merge: true });
+        }
+        console.log("[Storage] Cloud Firestore seeded successfully.");
+      }
+    }
+  } catch (e) {
+    console.warn("[Storage] Cloud Firestore initial check:", e);
+  }
+}
+syncLocalToFirestoreIfEmpty();
+
 async function getStoredSessions(): Promise<any[]> {
   if (firestoreClient) {
     try {
@@ -135,7 +168,7 @@ async function getStoredSessions(): Promise<any[]> {
         return tB - tA;
       });
     } catch (fsErr) {
-      console.warn("[Storage] Firestore read failed, falling back to local file:", fsErr);
+      console.warn("[Storage] Firestore read error, using local file storage:", fsErr);
     }
   }
   return getLocalSessions();
@@ -202,16 +235,7 @@ async function upsertSession(session: any): Promise<void> {
     safeSession.deletedAt = session.deletedAt;
   }
 
-  if (firestoreClient) {
-    try {
-      await firestoreClient.collection("interviews").doc(safeSession.id).set(safeSession, { merge: true });
-      return;
-    } catch (fsErr) {
-      console.warn("[Storage] Firestore write failed, falling back to local file:", fsErr);
-    }
-  }
-
-  // Local fallback
+  // Always keep local disk in sync as fallback
   const sessions = getLocalSessions();
   const idx = sessions.findIndex((s) => s.id === safeSession.id);
   if (idx >= 0) {
@@ -226,22 +250,32 @@ async function upsertSession(session: any): Promise<void> {
     sessions.unshift(safeSession);
   }
   saveLocalSessions(sessions);
+
+  // Write to Cloud Firestore
+  if (firestoreClient) {
+    try {
+      await firestoreClient.collection("interviews").doc(safeSession.id).set(safeSession, { merge: true });
+    } catch (fsErr) {
+      console.warn("[Storage] Firestore write error:", fsErr);
+    }
+  }
 }
 
 async function deleteStoredSession(id: string): Promise<number> {
+  let sessions = getLocalSessions();
+  sessions = sessions.filter((s) => s.id !== id);
+  saveLocalSessions(sessions);
+
   if (firestoreClient) {
     try {
       await firestoreClient.collection("interviews").doc(id).delete();
       const snapshot = await firestoreClient.collection("interviews").count().get();
       return snapshot.data().count;
     } catch (fsErr) {
-      console.warn("[Storage] Firestore delete failed, falling back to local file:", fsErr);
+      console.warn("[Storage] Firestore delete error:", fsErr);
     }
   }
 
-  let sessions = getLocalSessions();
-  sessions = sessions.filter((s) => s.id !== id);
-  saveLocalSessions(sessions);
   return sessions.length;
 }
 

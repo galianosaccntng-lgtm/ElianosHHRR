@@ -1,0 +1,42 @@
+{
+  "entities": {
+    "interviews": {
+      "title": "Interview Session",
+      "description": "Candidate application, conversation transcript, evaluation and metadata",
+      "properties": {
+        "id": { "type": "string", "description": "Unique session ID" },
+        "candidateName": { "type": "string" },
+        "email": { "type": "string" },
+        "phone": { "type": "string" },
+        "role": { "type": "string" },
+        "date": { "type": "string" },
+        "completed": { "type": "boolean" },
+        "status": { "type": "string" },
+        "evaluation": { "type": "string" },
+        "emailSent": { "type": "boolean" },
+        "isArchived": { "type": "boolean" },
+        "lastUpdated": { "type": "string" },
+        "reminderSentAt": { "type": "string" }
+      },
+      "required": ["id", "candidateName", "role"]
+    }
+  },
+  "firestore": {
+    "collections": {
+      "interviews": {
+        "path": "/interviews/{interviewId}",
+        "schema": {
+          "$ref": "#/entities/interviews"
+        },
+        "indexes": [
+          {
+            "fields": [
+              { "fieldPath": "completed", "order": "ASCENDING" },
+              { "fieldPath": "date", "order": "DESCENDING" }
+            ]
+          }
+        ]
+      }
+    }
+  }
+}
