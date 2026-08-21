@@ -1,6 +1,6 @@
-import React, { useState, useEffect } from 'react';
-import { InterviewSession, InterviewStatus } from '../types';
-import { ArrowLeft, CheckCircle2, MessageSquare, ChevronRight, FileText, Trash2, Award, Copy, Check, ShieldCheck, LogOut, RefreshCw, Search, Mail, Phone, Loader2, AlertCircle, Clock, PlayCircle, ExternalLink, RotateCcw } from 'lucide-react';
+import React, { useState, useEffect, useRef } from 'react';
+import { InterviewSession, InterviewStatus, SecondInterviewGuide, SecondInterviewScores } from '../types';
+import { ArrowLeft, CheckCircle2, MessageSquare, ChevronRight, FileText, Trash2, Award, Copy, Check, ShieldCheck, LogOut, RefreshCw, Search, Mail, Phone, Loader2, AlertCircle, Clock, PlayCircle, ExternalLink, RotateCcw, Sparkles, Star, HelpCircle, Save } from 'lucide-react';
 import clsx from 'clsx';
 import Markdown from 'react-markdown';
 import { humanConfidence } from '../authenticity';
@@ -15,6 +15,38 @@ interface DashboardProps {
 }
 
 const STORAGE_KEY = 'ellianos_candidate_sessions_v1';
+
+export function formatGuideAsPlainText(guide: SecondInterviewGuide): string {
+  let out = `=== GUÍA PARA SEGUNDA ENTREVISTA ===\n\n`;
+  out += `PUNTOS DE ENFOQUE A VERIFICAR:\n`;
+  (guide.focusPoints || []).forEach((pt, i) => {
+    out += `${i + 1}. ${pt}\n`;
+  });
+  out += `\nCONSEJOS PARA EL ENTREVISTADOR:\n`;
+  (guide.interviewerTips || []).forEach((tip) => {
+    out += `* ${tip}\n`;
+  });
+  const totalMins = (guide.blocks || []).reduce((acc, b) => acc + (b.minutes || 0), 0);
+  out += `\nBLOQUES DE LA ENTREVISTA (${totalMins} MINUTOS TOTAL):\n`;
+  (guide.blocks || []).forEach((block, bIdx) => {
+    out += `\n------------------------------------------------------------\n`;
+    out += `BLOQUE ${bIdx + 1}: ${block.title.toUpperCase()} (${block.minutes} min) ${block.mustPass ? '[ELIMINATORIO / MUST PASS]' : '[FORMATIVO / OP]'}\n`;
+    out += `Objetivo: ${block.goal}\n\n`;
+    const bQuestions = (guide.questions || []).filter((q) => (block.questionIds || []).includes(q.id));
+    bQuestions.forEach((q, qIdx) => {
+      out += `Pregunta ${bIdx + 1}.${qIdx + 1} [${(q.language || 'es').toUpperCase()}]: "${q.text}"\n`;
+      out += `  - Propósito: ${q.purpose}\n`;
+      out += `  - Escuchar (Buena señal): ${(q.listenFor || []).join('; ')}\n`;
+      out += `  - Alertas (Red Flags): ${(q.redFlags || []).join('; ')}\n\n`;
+    });
+  });
+  out += `------------------------------------------------------------\n`;
+  out += `CRITERIOS DE DECISIÓN:\n`;
+  out += `* Contratar: ${guide.decision?.hire || 'N/A'}\n`;
+  out += `* Tercera Conversación: ${guide.decision?.thirdConversation || 'N/A'}\n`;
+  out += `* Declinar: ${guide.decision?.decline || 'N/A'}\n`;
+  return out;
+}
 
 export function getEffectiveStatus(session: InterviewSession): InterviewStatus {
   if (session.status === 'Completed' || session.evaluation) {
@@ -120,7 +152,7 @@ export function Dashboard({ adminToken, onBack, onLogout, onResume, onDelete, on
   const [isLoading, setIsLoading] = useState(true);
   const [isEvaluating, setIsEvaluating] = useState(false);
   const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null);
-  const [activeTab, setActiveTab] = useState<'evaluation' | 'transcript' | 'contact'>('transcript');
+  const [activeTab, setActiveTab] = useState<'evaluation' | 'secondInterview' | 'transcript' | 'contact'>('transcript');
   const [copied, setCopied] = useState(false);
   const [copiedContact, setCopiedContact] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
@@ -129,6 +161,15 @@ export function Dashboard({ adminToken, onBack, onLogout, onResume, onDelete, on
   const [isSendingFollowUp, setIsSendingFollowUp] = useState(false);
   const [followUpSuccessEmail, setFollowUpSuccessEmail] = useState<string | null>(null);
   const [followUpError, setFollowUpError] = useState<string | null>(null);
+
+  // Second Interview Guide state
+  const [scores, setScores] = useState<Record<string, number>>({});
+  const [notes, setNotes] = useState<Record<string, string>>({});
+  const [saveStatus, setSaveStatus] = useState<'saved' | 'saving' | 'error' | null>(null);
+  const [isGeneratingGuide, setIsGeneratingGuide] = useState(false);
+  const [guideError, setGuideError] = useState<string | null>(null);
+  const [copiedGuide, setCopiedGuide] = useState(false);
+  const debounceTimerRef = useRef<NodeJS.Timeout | null>(null);
 
   const fetchServerSessions = async () => {
     if (!adminToken) return;
@@ -223,6 +264,140 @@ export function Dashboard({ adminToken, onBack, onLogout, onResume, onDelete, on
   const trashSessions = sessions.filter(s => !!s.deletedAt);
 
   const selectedSession = activeSessions.find(s => s.id === selectedSessionId);
+
+  useEffect(() => {
+    if (selectedSession?.secondInterviewScores) {
+      setScores(selectedSession.secondInterviewScores.scores || {});
+      setNotes(selectedSession.secondInterviewScores.notes || {});
+    } else {
+      setScores({});
+      setNotes({});
+    }
+    setGuideError(null);
+    setSaveStatus(null);
+    setCopiedGuide(false);
+  }, [selectedSessionId]);
+
+  const saveScoresToServer = async (newScores: Record<string, number>, newNotes: Record<string, string>) => {
+    if (!selectedSession || !adminToken) return;
+    setSaveStatus('saving');
+    try {
+      const res = await fetch(`/api/admin/sessions/${selectedSession.id}/second-interview-scores`, {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-admin-passcode': adminToken,
+        },
+        body: JSON.stringify({ scores: newScores, notes: newNotes }),
+      });
+      if (res.ok) {
+        setSaveStatus('saved');
+        const updatedScores: SecondInterviewScores = {
+          scores: newScores,
+          notes: newNotes,
+          updatedAt: new Date().toISOString(),
+        };
+        const updatedList = sessions.map(s => s.id === selectedSession.id ? { ...s, secondInterviewScores: updatedScores } : s);
+        setSessions(updatedList);
+        if (onSessionsUpdated) onSessionsUpdated(updatedList);
+        try {
+          localStorage.setItem(STORAGE_KEY, JSON.stringify(updatedList));
+        } catch (e) {
+          console.warn('LocalStorage save warning:', e);
+        }
+      } else {
+        setSaveStatus('error');
+      }
+    } catch (err) {
+      console.error('Failed to save scores:', err);
+      setSaveStatus('error');
+    }
+  };
+
+  const handleScoreChange = (qId: string, value: number) => {
+    const nextScores = { ...scores };
+    if (nextScores[qId] === value) {
+      delete nextScores[qId];
+    } else {
+      nextScores[qId] = value;
+    }
+    setScores(nextScores);
+    setSaveStatus('saving');
+
+    if (debounceTimerRef.current) clearTimeout(debounceTimerRef.current);
+    debounceTimerRef.current = setTimeout(() => {
+      saveScoresToServer(nextScores, notes);
+    }, 800);
+  };
+
+  const handleNoteChange = (qId: string, text: string) => {
+    const nextNotes = { ...notes, [qId]: text };
+    setNotes(nextNotes);
+    setSaveStatus('saving');
+
+    if (debounceTimerRef.current) clearTimeout(debounceTimerRef.current);
+    debounceTimerRef.current = setTimeout(() => {
+      saveScoresToServer(scores, nextNotes);
+    }, 800);
+  };
+
+  const handleGenerateGuide = async (force = false) => {
+    if (!selectedSession || !adminToken || isGeneratingGuide) return;
+    if (force && !window.confirm("Se reemplazará la guía actual y se borrarán las puntuaciones registradas. ¿Deseas continuar?")) {
+      return;
+    }
+
+    setIsGeneratingGuide(true);
+    setGuideError(null);
+
+    try {
+      const res = await fetch(`/api/admin/sessions/${selectedSession.id}/second-interview-guide`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-admin-passcode': adminToken,
+        },
+        body: JSON.stringify({ force }),
+      });
+
+      const data = await res.json();
+      if (!res.ok || !data.success || !data.guide) {
+        throw new Error(data.error || "La IA no está disponible ahora; inténtalo más tarde.");
+      }
+
+      const updatedSession: InterviewSession = {
+        ...selectedSession,
+        secondInterviewGuide: data.guide,
+        secondInterviewScores: force ? undefined : selectedSession.secondInterviewScores,
+      };
+      if (force) {
+        delete updatedSession.secondInterviewScores;
+        setScores({});
+        setNotes({});
+      }
+
+      const updatedList = sessions.map(s => s.id === selectedSession.id ? updatedSession : s);
+      setSessions(updatedList);
+      if (onSessionsUpdated) onSessionsUpdated(updatedList);
+      try {
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(updatedList));
+      } catch (e) {
+        console.warn('LocalStorage save warning:', e);
+      }
+    } catch (err: any) {
+      console.error('Failed to generate second interview guide:', err);
+      setGuideError(err.message || "La IA no está disponible ahora; inténtalo más tarde.");
+    } finally {
+      setIsGeneratingGuide(false);
+    }
+  };
+
+  const handleCopyGuide = (guide: SecondInterviewGuide) => {
+    const text = formatGuideAsPlainText(guide);
+    navigator.clipboard.writeText(text);
+    setCopiedGuide(true);
+    setTimeout(() => setCopiedGuide(false), 2000);
+  };
 
   // Soft delete: moves to trash
   const handleDelete = async (id: string, name: string) => {
@@ -766,6 +941,12 @@ ESTADO: ${getEffectiveStatus(selectedSession)}`;
                               </span>
                             )}
 
+                            {session.secondInterviewGuide && (
+                              <span className="text-[10px] uppercase tracking-widest font-bold px-2 py-0.5 rounded-full bg-purple-50 text-purple-900 border border-purple-200 flex items-center gap-1">
+                                <Sparkles className="w-2.5 h-2.5 text-purple-600" /> 2ª Guía Lista
+                              </span>
+                            )}
+
                             {session.followUpSentAt && (
                               <span className="text-[10px] uppercase tracking-widest font-bold px-2 py-0.5 rounded-full bg-amber-50 text-amber-800 border border-amber-200 flex items-center gap-1">
                                 <Mail className="w-2.5 h-2.5 text-amber-600" /> Recordatorio Enviado
@@ -1005,6 +1186,19 @@ ESTADO: ${getEffectiveStatus(selectedSession)}`;
                 >
                   <Award className="w-4 h-4 text-[#D4A373]" />
                   Evaluación & Confianza {selectedSession.evaluation ? '✓' : '(Generar)'}
+                </button>
+
+                <button
+                  onClick={() => setActiveTab('secondInterview')}
+                  className={clsx(
+                    "flex items-center gap-2 px-6 py-3 font-bold text-xs uppercase tracking-widest border-b-2 transition-colors whitespace-nowrap",
+                    activeTab === 'secondInterview'
+                      ? "border-[#4B2C20] text-[#4B2C20]"
+                      : "border-transparent text-[#4B2C20]/60 hover:text-[#4B2C20]"
+                  )}
+                >
+                  <Sparkles className="w-4 h-4 text-[#D4A373]" />
+                  2ª Entrevista {selectedSession.secondInterviewGuide ? '✓' : '(Generar)'}
                 </button>
 
                 <button
@@ -1258,7 +1452,466 @@ ESTADO: ${getEffectiveStatus(selectedSession)}`;
                 </div>
               )}
 
-              {/* Tab 2: Candidate Contact Information */}
+              {/* Tab 2: Second Interview Guide (AI Generated & Live Scoring) */}
+              {activeTab === 'secondInterview' && (
+                <div className="space-y-6">
+                  {selectedSession.secondInterviewGuide ? (
+                    (() => {
+                      const guide = selectedSession.secondInterviewGuide;
+                      const allQuestions = guide.questions || [];
+                      const totalQuestions = allQuestions.length;
+                      const scoredKeys = Object.keys(scores).filter(k => typeof scores[k] === 'number');
+                      const scoredCount = scoredKeys.length;
+                      const totalScoreSum = scoredKeys.reduce((acc, k) => acc + (scores[k] || 0), 0);
+                      const overallAvg = scoredCount > 0 ? (totalScoreSum / scoredCount) : null;
+
+                      // Evaluate must-pass blocks
+                      const blocks = guide.blocks || [];
+                      let mustPassFailed = false;
+                      let mustPassExcellent = true;
+                      let evaluatedMustPassBlocksCount = 0;
+
+                      blocks.forEach(b => {
+                        if (b.mustPass) {
+                          const bQIds = b.questionIds || [];
+                          const bScores = bQIds.map(id => scores[id]).filter(s => typeof s === 'number');
+                          if (bScores.length > 0) {
+                            evaluatedMustPassBlocksCount += 1;
+                            const bAvg = bScores.reduce((a, c) => a + c, 0) / bScores.length;
+                            if (bAvg < 2.5) {
+                              mustPassFailed = true;
+                            }
+                            if (bAvg < 3.8) {
+                              mustPassExcellent = false;
+                            }
+                          } else {
+                            mustPassExcellent = false;
+                          }
+                        }
+                      });
+
+                      let calculatedVerdict: { title: string; desc: string; type: 'hire' | 'third' | 'decline' } = {
+                        title: 'Pendiente de puntuación',
+                        desc: 'Puntúe las preguntas durante la entrevista para obtener la recomendación automatizada.',
+                        type: 'third',
+                      };
+
+                      if (scoredCount > 0) {
+                        if (mustPassFailed) {
+                          calculatedVerdict = {
+                            title: 'Recomendación: Declinar Candidato',
+                            desc: 'Uno o más bloques eliminatorios (Must-Pass) tienen una calificación deficiente por debajo del mínimo.',
+                            type: 'decline',
+                          };
+                        } else if (mustPassExcellent && overallAvg !== null && overallAvg >= 3.8 && scoredCount >= Math.ceil(totalQuestions * 0.7)) {
+                          calculatedVerdict = {
+                            title: 'Recomendación: Contratar Candidato',
+                            desc: 'Cumple y supera los criterios clave en los bloques eliminatorios y operativos con alta solvencia.',
+                            type: 'hire',
+                          };
+                        } else {
+                          calculatedVerdict = {
+                            title: 'Recomendación: Tercera Conversación / Análisis Adicional',
+                            desc: 'Puntuación intermedia o dudas específicas en ciertas áreas. Requiere alineación con directiva.',
+                            type: 'third',
+                          };
+                        }
+                      }
+
+                      return (
+                        <div className="space-y-6">
+                          {/* Guide Top Header & Controls */}
+                          <div className="bg-white border border-[#E8DFD8] rounded-2xl p-6 shadow-xs flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
+                            <div>
+                              <div className="flex items-center gap-2 mb-1">
+                                <span className="text-[10px] uppercase tracking-widest font-bold px-2.5 py-0.5 rounded-full bg-purple-100 text-purple-900 border border-purple-300 flex items-center gap-1">
+                                  <Sparkles className="w-3 h-3 text-purple-700" /> Guía Presencial Personalizada
+                                </span>
+                                {guide.generatedAt && (
+                                  <span className="text-xs text-[#4B2C20]/60 font-light">
+                                    Generada el {new Date(guide.generatedAt).toLocaleDateString()} a las {new Date(guide.generatedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                                  </span>
+                                )}
+                              </div>
+                              <h3 className="text-2xl font-serif text-[#4B2C20]">
+                                Cuestionario & Pautas para 2ª Entrevista
+                              </h3>
+                              <p className="text-xs text-[#4B2C20]/70 font-light mt-0.5">
+                                Formulado a partir del análisis del historial de respuestas, consistencia y telemetría de {selectedSession.candidateInfo?.name || 'este candidato'}.
+                              </p>
+                            </div>
+
+                            <div className="flex flex-wrap items-center gap-2 shrink-0">
+                              <button
+                                onClick={() => handleCopyGuide(guide)}
+                                className="flex items-center gap-1.5 px-3.5 py-2 bg-white border border-[#E8DFD8] text-[#4B2C20] rounded-xl text-xs font-bold uppercase tracking-wider hover:bg-[#F5EFE6] transition-colors shadow-xs"
+                              >
+                                {copiedGuide ? <Check className="w-3.5 h-3.5 text-green-600" /> : <Copy className="w-3.5 h-3.5 text-[#D4A373]" />}
+                                {copiedGuide ? 'Guía Copiada' : 'Copiar Texto'}
+                              </button>
+
+                              <button
+                                onClick={() => handleGenerateGuide(true)}
+                                disabled={isGeneratingGuide}
+                                className="flex items-center gap-1.5 px-3.5 py-2 bg-[#FAF7F2] border border-[#E8DFD8] text-[#4B2C20] rounded-xl text-xs font-bold uppercase tracking-wider hover:bg-[#F5EFE6] transition-colors disabled:opacity-50 shadow-xs"
+                                title="Generar una nueva versión del cuestionario con IA"
+                              >
+                                {isGeneratingGuide ? (
+                                  <>
+                                    <Loader2 className="w-3.5 h-3.5 animate-spin text-[#D4A373]" /> Regenerando...
+                                  </>
+                                ) : (
+                                  <>
+                                    <RefreshCw className="w-3.5 h-3.5 text-[#D4A373]" /> Regenerar con IA
+                                  </>
+                                )}
+                              </button>
+                            </div>
+                          </div>
+
+                          {/* Live Recommendation & Scoring Summary Banner */}
+                          <div className={clsx(
+                            "rounded-2xl p-6 border transition-all shadow-xs flex flex-col md:flex-row items-start md:items-center justify-between gap-6",
+                            calculatedVerdict.type === 'hire'
+                              ? "bg-emerald-50/90 border-emerald-300"
+                              : calculatedVerdict.type === 'decline'
+                              ? "bg-red-50/90 border-red-300"
+                              : "bg-amber-50/90 border-amber-300"
+                          )}>
+                            <div className="space-y-1">
+                              <div className="flex items-center gap-2">
+                                <span className={clsx(
+                                  "text-xs uppercase tracking-widest font-bold px-2.5 py-0.5 rounded-full border",
+                                  calculatedVerdict.type === 'hire'
+                                    ? "bg-emerald-100 text-emerald-900 border-emerald-400"
+                                    : calculatedVerdict.type === 'decline'
+                                    ? "bg-red-100 text-red-900 border-red-400"
+                                    : "bg-amber-100 text-amber-900 border-amber-400"
+                                )}>
+                                  {calculatedVerdict.title}
+                                </span>
+                                {saveStatus === 'saving' && (
+                                  <span className="text-[11px] text-[#4B2C20]/70 flex items-center gap-1 font-medium animate-pulse">
+                                    <Loader2 className="w-3 h-3 animate-spin text-[#D4A373]" /> Guardando puntuación...
+                                  </span>
+                                )}
+                                {saveStatus === 'saved' && (
+                                  <span className="text-[11px] text-green-700 flex items-center gap-1 font-semibold">
+                                    <Check className="w-3 h-3 text-green-600" /> Cambios guardados
+                                  </span>
+                                )}
+                                {saveStatus === 'error' && (
+                                  <span className="text-[11px] text-red-700 flex items-center gap-1 font-semibold">
+                                    <AlertCircle className="w-3 h-3 text-red-600" /> Error al sincronizar
+                                  </span>
+                                )}
+                              </div>
+                              <p className="text-sm font-serif text-[#4B2C20] pt-1">
+                                {calculatedVerdict.desc}
+                              </p>
+                            </div>
+
+                            <div className="flex items-center gap-6 shrink-0 bg-white/80 border border-[#E8DFD8] rounded-xl px-5 py-3 shadow-xs">
+                              <div>
+                                <span className="text-[10px] uppercase tracking-wider text-neutral-500 font-bold block">
+                                  Progreso Puntuado
+                                </span>
+                                <span className="text-lg font-serif font-bold text-[#4B2C20]">
+                                  {scoredCount} / {totalQuestions}
+                                </span>
+                              </div>
+                              <div className="border-l border-[#E8DFD8] pl-6">
+                                <span className="text-[10px] uppercase tracking-wider text-neutral-500 font-bold block">
+                                  Promedio General
+                                </span>
+                                <span className="text-lg font-serif font-bold text-[#4B2C20]">
+                                  {overallAvg !== null ? `${overallAvg.toFixed(1)} / 5.0` : '—'}
+                                </span>
+                              </div>
+                            </div>
+                          </div>
+
+                          {/* Focus Points & Tips Grid */}
+                          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                            {guide.focusPoints && guide.focusPoints.length > 0 && (
+                              <div className="bg-white border border-[#E8DFD8] rounded-2xl p-6 shadow-xs space-y-3">
+                                <div className="flex items-center gap-2 pb-2 border-b border-[#E8DFD8]">
+                                  <AlertCircle className="w-4 h-4 text-[#D4A373]" />
+                                  <h4 className="text-xs uppercase tracking-widest font-bold text-[#4B2C20]">
+                                    Puntos Clave a Verificar en Presencial
+                                  </h4>
+                                </div>
+                                <ul className="space-y-2 text-xs text-[#4B2C20]/80 font-light leading-relaxed list-disc list-inside">
+                                  {guide.focusPoints.map((pt, i) => (
+                                    <li key={i} className="pl-1">
+                                      <span className="font-normal text-[#4B2C20]">{pt}</span>
+                                    </li>
+                                  ))}
+                                </ul>
+                              </div>
+                            )}
+
+                            {guide.interviewerTips && guide.interviewerTips.length > 0 && (
+                              <div className="bg-white border border-[#E8DFD8] rounded-2xl p-6 shadow-xs space-y-3">
+                                <div className="flex items-center gap-2 pb-2 border-b border-[#E8DFD8]">
+                                  <HelpCircle className="w-4 h-4 text-[#D4A373]" />
+                                  <h4 className="text-xs uppercase tracking-widest font-bold text-[#4B2C20]">
+                                    Consejos de Indagación para el Entrevistador
+                                  </h4>
+                                </div>
+                                <ul className="space-y-2 text-xs text-[#4B2C20]/80 font-light leading-relaxed list-disc list-inside">
+                                  {guide.interviewerTips.map((tip, i) => (
+                                    <li key={i} className="pl-1">
+                                      <span className="font-normal text-[#4B2C20]">{tip}</span>
+                                    </li>
+                                  ))}
+                                </ul>
+                              </div>
+                            )}
+                          </div>
+
+                          {/* Decision Framework Reference */}
+                          {guide.decision && (
+                            <div className="bg-white border border-[#E8DFD8] rounded-2xl p-6 shadow-xs space-y-3">
+                              <h4 className="text-xs uppercase tracking-widest font-bold text-[#4B2C20] pb-2 border-b border-[#E8DFD8]">
+                                Marco de Decisión y Criterios Predefinidos
+                              </h4>
+                              <div className="grid grid-cols-1 md:grid-cols-3 gap-4 text-xs">
+                                <div className="p-3.5 rounded-xl bg-green-50 border border-green-200">
+                                  <span className="font-bold text-green-900 block mb-1 uppercase tracking-wider text-[10px]">
+                                    ✓ Contratar
+                                  </span>
+                                  <p className="text-green-800 font-light leading-relaxed">
+                                    {guide.decision.hire}
+                                  </p>
+                                </div>
+
+                                <div className="p-3.5 rounded-xl bg-amber-50 border border-amber-200">
+                                  <span className="font-bold text-amber-900 block mb-1 uppercase tracking-wider text-[10px]">
+                                    ? Tercera Conversación
+                                  </span>
+                                  <p className="text-amber-800 font-light leading-relaxed">
+                                    {guide.decision.thirdConversation}
+                                  </p>
+                                </div>
+
+                                <div className="p-3.5 rounded-xl bg-red-50 border border-red-200">
+                                  <span className="font-bold text-red-900 block mb-1 uppercase tracking-wider text-[10px]">
+                                    ✕ Declinar
+                                  </span>
+                                  <p className="text-red-800 font-light leading-relaxed">
+                                    {guide.decision.decline}
+                                  </p>
+                                </div>
+                              </div>
+                            </div>
+                          )}
+
+                          {/* Interview Blocks & Interactive Questions */}
+                          <div className="space-y-6">
+                            {blocks.map((block, bIdx) => {
+                              const blockQuestions = allQuestions.filter(q => (block.questionIds || []).includes(q.id));
+                              const bScores = blockQuestions.map(q => scores[q.id]).filter(s => typeof s === 'number');
+                              const bAvg = bScores.length > 0 ? (bScores.reduce((a, c) => a + c, 0) / bScores.length) : null;
+
+                              return (
+                                <div
+                                  key={block.id || bIdx}
+                                  className="bg-white border border-[#E8DFD8] rounded-2xl p-6 md:p-8 shadow-xs space-y-6"
+                                >
+                                  {/* Block Header */}
+                                  <div className="flex flex-col md:flex-row md:items-center justify-between gap-3 pb-4 border-b border-[#E8DFD8]">
+                                    <div>
+                                      <div className="flex flex-wrap items-center gap-2 mb-1">
+                                        <span className="text-[10px] uppercase font-bold tracking-widest px-2.5 py-0.5 rounded-full bg-[#FAF7F2] text-[#4B2C20] border border-[#E8DFD8]">
+                                          Bloque {bIdx + 1} &middot; {block.minutes} min
+                                        </span>
+                                        <span className={clsx(
+                                          "text-[10px] uppercase font-bold tracking-widest px-2.5 py-0.5 rounded-full border",
+                                          block.mustPass
+                                            ? "bg-red-50 text-red-900 border-red-300"
+                                            : "bg-neutral-50 text-neutral-700 border-neutral-200"
+                                        )}>
+                                          {block.mustPass ? "Eliminatorio (Must-Pass)" : "Formativo / Competencias"}
+                                        </span>
+                                      </div>
+                                      <h4 className="text-xl font-serif text-[#4B2C20]">
+                                        {block.title}
+                                      </h4>
+                                      <p className="text-xs text-[#4B2C20]/75 font-light mt-1">
+                                        <strong>Objetivo:</strong> {block.goal}
+                                      </p>
+                                    </div>
+
+                                    {bAvg !== null && (
+                                      <div className="shrink-0 flex items-center gap-2 bg-[#FAF7F2] border border-[#E8DFD8] px-3.5 py-2 rounded-xl text-xs">
+                                        <span className="text-neutral-500 font-medium text-[11px] uppercase tracking-wider">Promedio Bloque:</span>
+                                        <span className={clsx(
+                                          "font-bold font-serif text-sm",
+                                          bAvg >= 3.8 ? "text-green-700" : bAvg >= 2.5 ? "text-amber-700" : "text-red-700"
+                                        )}>
+                                          {bAvg.toFixed(1)} / 5.0
+                                        </span>
+                                      </div>
+                                    )}
+                                  </div>
+
+                                  {/* Questions inside Block */}
+                                  <div className="space-y-6">
+                                    {blockQuestions.map((question, qIdx) => {
+                                      const currentScore = scores[question.id];
+                                      const currentNote = notes[question.id] || '';
+
+                                      return (
+                                        <div
+                                          key={question.id || qIdx}
+                                          className="p-5 rounded-2xl bg-[#FAF7F2]/60 border border-[#E8DFD8] space-y-4"
+                                        >
+                                          {/* Question Title & Language */}
+                                          <div className="flex items-start justify-between gap-3">
+                                            <div className="space-y-1">
+                                              <div className="flex items-center gap-2">
+                                                <span className="text-[10px] font-bold uppercase tracking-wider text-[#D4A373]">
+                                                  Pregunta {bIdx + 1}.{qIdx + 1}
+                                                </span>
+                                                {question.language === 'en' && (
+                                                  <span className="text-[9px] uppercase tracking-widest font-bold px-2 py-0.5 rounded-full bg-blue-100 text-blue-900 border border-blue-300">
+                                                    EN &mdash; English Verification
+                                                  </span>
+                                                )}
+                                              </div>
+                                              <h5 className="text-base font-serif font-medium text-[#4B2C20] leading-snug">
+                                                "{question.text}"
+                                              </h5>
+                                              <p className="text-xs text-[#4B2C20]/70 font-light">
+                                                <strong>Propósito:</strong> {question.purpose}
+                                              </p>
+                                            </div>
+                                          </div>
+
+                                          {/* Listen For vs Red Flags Cards */}
+                                          <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-xs">
+                                            <div className="p-3.5 bg-emerald-50/70 border border-emerald-200 rounded-xl space-y-1.5">
+                                              <span className="font-bold text-emerald-900 text-[10px] uppercase tracking-wider flex items-center gap-1">
+                                                <CheckCircle2 className="w-3 h-3 text-emerald-700" /> Qué escuchar (Buena Señal)
+                                              </span>
+                                              <ul className="space-y-1 text-emerald-950 font-light list-disc list-inside">
+                                                {(question.listenFor || []).map((lf, i) => (
+                                                  <li key={i}>{lf}</li>
+                                                ))}
+                                              </ul>
+                                            </div>
+
+                                            <div className="p-3.5 bg-red-50/70 border border-red-200 rounded-xl space-y-1.5">
+                                              <span className="font-bold text-red-900 text-[10px] uppercase tracking-wider flex items-center gap-1">
+                                                <AlertCircle className="w-3 h-3 text-red-700" /> Alertas (Red Flags)
+                                              </span>
+                                              <ul className="space-y-1 text-red-950 font-light list-disc list-inside">
+                                                {(question.redFlags || []).map((rf, i) => (
+                                                  <li key={i}>{rf}</li>
+                                                ))}
+                                              </ul>
+                                            </div>
+                                          </div>
+
+                                          {/* Live Rating & Notes Form */}
+                                          <div className="pt-2 border-t border-[#E8DFD8]/80 space-y-3">
+                                            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                                              <span className="text-[11px] font-bold uppercase tracking-wider text-[#4B2C20]">
+                                                Puntuación en Vivo (1 a 5):
+                                              </span>
+                                              <div className="flex items-center gap-1.5">
+                                                {[1, 2, 3, 4, 5].map((val) => {
+                                                  const isSelected = currentScore === val;
+                                                  return (
+                                                    <button
+                                                      key={val}
+                                                      type="button"
+                                                      onClick={() => handleScoreChange(question.id, val)}
+                                                      className={clsx(
+                                                        "w-8 h-8 rounded-lg font-bold text-xs transition-all flex items-center justify-center border",
+                                                        isSelected
+                                                          ? val >= 4
+                                                            ? "bg-green-700 text-white border-green-800 shadow-sm"
+                                                            : val === 3
+                                                            ? "bg-amber-600 text-white border-amber-700 shadow-sm"
+                                                            : "bg-red-600 text-white border-red-700 shadow-sm"
+                                                          : "bg-white text-[#4B2C20] border-[#E8DFD8] hover:bg-[#FAF7F2]"
+                                                      )}
+                                                      title={`Puntuar ${val} de 5`}
+                                                    >
+                                                      {val}
+                                                    </button>
+                                                  );
+                                                })}
+                                              </div>
+                                            </div>
+
+                                            <div>
+                                              <textarea
+                                                value={currentNote}
+                                                maxLength={2000}
+                                                onChange={(e) => handleNoteChange(question.id, e.target.value)}
+                                                placeholder="Anotaciones en vivo sobre la respuesta del candidato..."
+                                                className="w-full text-xs font-light p-3 rounded-xl border border-[#E8DFD8] bg-white text-[#4B2C20] focus:ring-1 focus:ring-[#4B2C20] focus:border-[#4B2C20] outline-hidden resize-y min-h-[60px]"
+                                              />
+                                            </div>
+                                          </div>
+                                        </div>
+                                      );
+                                    })}
+                                  </div>
+                                </div>
+                              );
+                            })}
+                          </div>
+                        </div>
+                      );
+                    })()
+                  ) : (
+                    <div className="bg-white border border-[#E8DFD8] rounded-2xl p-8 md:p-12 shadow-xs text-center space-y-4">
+                      <div className="w-14 h-14 bg-purple-50 border border-purple-200 rounded-2xl flex items-center justify-center mx-auto text-purple-700">
+                        <Sparkles className="w-7 h-7" />
+                      </div>
+                      <div>
+                        <h3 className="text-xl font-serif font-bold text-[#4B2C20]">
+                          Guía de 2ª Entrevista Presencial
+                        </h3>
+                        <p className="text-xs text-[#4B2C20]/70 font-light max-w-lg mx-auto mt-2 leading-relaxed">
+                          La IA analizará las respuestas previas del candidato, sus métricas de consistencia y redactará un cuestionario a medida para la entrevista presencial con pautas de observación, verificación en inglés, casos de estrés y rúbrica de puntuación en vivo.
+                        </p>
+                      </div>
+
+                      {guideError && (
+                        <div className="max-w-md mx-auto p-3 bg-red-50 border border-red-200 text-red-700 text-xs rounded-xl flex items-center gap-2">
+                          <AlertCircle className="w-4 h-4 shrink-0" />
+                          <span>{guideError}</span>
+                        </div>
+                      )}
+
+                      <div>
+                        <button
+                          onClick={() => handleGenerateGuide(false)}
+                          disabled={isGeneratingGuide}
+                          className="inline-flex items-center gap-2 px-6 py-3 bg-[#4B2C20] text-[#FAF7F2] rounded-xl text-xs font-bold uppercase tracking-wider hover:bg-[#3E2723] transition-colors disabled:opacity-50 shadow-md"
+                        >
+                          {isGeneratingGuide ? (
+                            <>
+                              <Loader2 className="w-4 h-4 animate-spin text-[#D4A373]" /> Generando Guía con IA...
+                            </>
+                          ) : (
+                            <>
+                              <Sparkles className="w-4 h-4 text-[#D4A373]" /> Generar Guía de 2ª Entrevista con IA
+                            </>
+                          )}
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* Tab 3: Candidate Contact Information */}
               {activeTab === 'contact' && (
                 <div className="bg-white border border-[#E8DFD8] rounded-2xl p-6 md:p-8 shadow-xs">
                   <h3 className="text-xl font-serif text-[#4B2C20] mb-4 pb-2 border-b border-[#E8DFD8]">

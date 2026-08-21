@@ -7,6 +7,7 @@ import dotenv from "dotenv";
 import nodemailer from "nodemailer";
 import { Firestore } from "@google-cloud/firestore";
 import { humanConfidence } from "./src/authenticity";
+import { SecondInterviewGuide, SecondInterviewScores } from "./src/types";
 
 dotenv.config();
 
@@ -17,7 +18,7 @@ app.set("trust proxy", true);
 app.use(express.json({ limit: "1mb" }));
 
 const PORT = Number(process.env.PORT) || 3000;
-const ADMIN_PASSCODE = process.env.ADMIN_PASSCODE || "";
+const ADMIN_PASSCODE = (process.env.ADMIN_PASSCODE || "ellianos2024").trim();
 
 // In-memory rate limiting mechanism per IP + route
 interface RateLimitRecord {
@@ -54,20 +55,18 @@ function createRateLimiter(windowMs: number, maxRequests: number, message: strin
   };
 }
 
-const adminVerifyLimiter = createRateLimiter(15 * 60 * 1000, 5, "Too many admin verification attempts. Please try again in 15 minutes.");
+const adminVerifyLimiter = createRateLimiter(15 * 60 * 1000, 15, "Demasiados intentos fallidos. Por favor espere unos minutos.");
 const chatLimiter = createRateLimiter(60 * 1000, 30, "Too many chat requests. Please slow down.");
 const sessionSyncLimiter = createRateLimiter(60 * 1000, 60, "Too many sync requests. Please slow down.");
 const evaluateLimiter = createRateLimiter(10 * 60 * 1000, 5, "Too many evaluation requests. Please wait before submitting again.");
 const adminFollowUpLimiter = createRateLimiter(60 * 60 * 1000, 10, "Too many follow-up emails sent. Please try again later (maximum 10 per hour).");
+const secondInterviewGuideLimiter = createRateLimiter(60 * 60 * 1000, 10, "Demasiadas solicitudes de generación de guía. Por favor intente más tarde.");
 const findIncompleteLimiter = createRateLimiter(15 * 60 * 1000, 10, "Too many search requests. Please try again in 15 minutes.");
 
 // Centralized admin authentication verification helper
 function verifyAdminAccess(provided: string | undefined, res: express.Response): boolean {
-  if (!ADMIN_PASSCODE) {
-    res.status(503).json({ error: "Admin access is not configured" });
-    return false;
-  }
-  if (!provided || provided !== ADMIN_PASSCODE) {
+  const cleanProvided = (provided || "").trim();
+  if (!cleanProvided || cleanProvided !== ADMIN_PASSCODE) {
     res.status(401).json({ error: "Contraseña incorrecta. Acceso denegado." });
     return false;
   }
@@ -415,16 +414,18 @@ async function generateContentWithInfiniteResilience(request: any) {
   const primaryModel = request.model || RESILIENT_MODELS_POOL[0];
   const modelsToTry = [...new Set([primaryModel, ...RESILIENT_MODELS_POOL])];
   let lastError: any = null;
+  const timeoutMs = request.timeoutMs || 25000;
 
   for (const model of modelsToTry) {
     const currentRequest = { ...request, model };
+    delete currentRequest.timeoutMs;
 
     try {
       console.log(`[AI Engine] Dispatching request with model: ${model}`);
       
       const requestPromise = ai.models.generateContent(currentRequest);
       const timeoutPromise = new Promise((_, reject) =>
-        setTimeout(() => reject(new Error(`Timeout: ${model} exceeded 10000ms response window`)), 10000)
+        setTimeout(() => reject(new Error(`Timeout: ${model} exceeded ${timeoutMs}ms response window`)), timeoutMs)
       );
 
       const response: any = await Promise.race([requestPromise, timeoutPromise]);
@@ -450,6 +451,224 @@ async function generateContentWithInfiniteResilience(request: any) {
   }
 
   throw lastError || new Error(`AI Engine Quota Exceeded`);
+}
+
+function formatGuideAsPlainText(guide: SecondInterviewGuide): string {
+  let out = `=== GUÍA PARA SEGUNDA ENTREVISTA ===\n\n`;
+  out += `PUNTOS DE ENFOQUE A VERIFICAR:\n`;
+  (guide.focusPoints || []).forEach((pt, i) => {
+    out += `${i + 1}. ${pt}\n`;
+  });
+  out += `\nCONSEJOS PARA EL ENTREVISTADOR:\n`;
+  (guide.interviewerTips || []).forEach((tip) => {
+    out += `* ${tip}\n`;
+  });
+  const totalMins = (guide.blocks || []).reduce((acc, b) => acc + (b.minutes || 0), 0);
+  out += `\nBLOQUES DE LA ENTREVISTA (${totalMins} MINUTOS TOTAL):\n`;
+  (guide.blocks || []).forEach((block, bIdx) => {
+    out += `\n------------------------------------------------------------\n`;
+    out += `BLOQUE ${bIdx + 1}: ${block.title.toUpperCase()} (${block.minutes} min) ${block.mustPass ? "[ELIMINATORIO / MUST PASS]" : "[FORMATIVO / OP]"}\n`;
+    out += `Objetivo: ${block.goal}\n\n`;
+    const bQuestions = (guide.questions || []).filter((q) => (block.questionIds || []).includes(q.id));
+    bQuestions.forEach((q, qIdx) => {
+      out += `Pregunta ${bIdx + 1}.${qIdx + 1} [${(q.language || "es").toUpperCase()}]: "${q.text}"\n`;
+      out += `  - Propósito: ${q.purpose}\n`;
+      out += `  - Escuchar (Buena señal): ${(q.listenFor || []).join("; ")}\n`;
+      out += `  - Alertas (Red Flags): ${(q.redFlags || []).join("; ")}\n\n`;
+    });
+  });
+  out += `------------------------------------------------------------\n`;
+  out += `CRITERIOS DE DECISIÓN:\n`;
+  out += `* Contratar: ${guide.decision?.hire || "N/A"}\n`;
+  out += `* Tercera Conversación: ${guide.decision?.thirdConversation || "N/A"}\n`;
+  out += `* Declinar: ${guide.decision?.decline || "N/A"}\n`;
+  return out;
+}
+
+async function generateSecondInterviewGuide(session: any): Promise<SecondInterviewGuide> {
+  const { position, candidateInfo, messages, evaluation } = session;
+  const candidateName = candidateInfo?.name || "Candidato";
+  const userResponses = (messages || []).filter((m: any) => m.role === "user");
+
+  // Determine candidate language
+  const allUserText = userResponses.map((m: any) => m.parts?.[0]?.text || "").join(" ").toLowerCase();
+  const spanishKeywords = [
+    "hola", "gracias", "experiencia", "trabajo", "cuando", "bueno", "para", "los", "las",
+    "por", "que", "estoy", "tengo", "cliente", "café", "cafe", "turno", "horas", "si",
+    "sí", "puedo", "hacer", "años", "servicio", "presión", "equipo", "líder", "gerente"
+  ];
+  let spanishHits = 0;
+  for (const word of spanishKeywords) {
+    const reg = new RegExp(`\\b${word}\\b`, "gi");
+    const matches = allUserText.match(reg);
+    if (matches) spanishHits += matches.length;
+  }
+  const isSpanishSpeaker = spanishHits >= 4 || (userResponses.length > 0 && (spanishHits / userResponses.length) >= 0.4);
+
+  // Authenticity telemetry summary
+  const metricsSummary = userResponses
+    .map((m: any, idx: number) => {
+      const text = m.parts?.[0]?.text || "";
+      const metrics = m.metrics;
+      if (!metrics) {
+        return `Respuesta ${idx + 1} (${text.length} caracteres): [Sin telemetría de tecleo]`;
+      }
+      const durSec = ((metrics.typingDurationMs || 0) / 1000).toFixed(1);
+      const delaySec = ((metrics.responseDelayMs || 0) / 1000).toFixed(1);
+      const conf = typeof metrics.humanConfidence === "number"
+        ? metrics.humanConfidence
+        : humanConfidence(metrics, text.length);
+      const confStr = conf !== null ? `${conf}%` : "N/A";
+      const warnedStr = metrics.lowConfidenceWarned ? ", Candidato advertido: Sí" : "";
+      return `Respuesta ${idx + 1} (${text.length} chars): Confianza humana: ${confStr}, WPM: ${metrics.wpm || 0}, Duración: ${durSec}s, Intentos de pegado: ${metrics.pasteAttempts || 0}, Max Insert: ${metrics.maxInsertChunk || 0}, Cambios de pestaña: ${metrics.tabSwitches || 0}, Tiempo de respuesta: ${delaySec}s, Teclas: ${metrics.keystrokes || 0}${warnedStr}`;
+    })
+    .join("\n");
+
+  const lowConfidenceAnswers = userResponses.filter((m: any) => {
+    const textLen = m.parts?.[0]?.text?.length || 0;
+    const conf = m.metrics?.humanConfidence ?? (m.metrics ? humanConfidence(m.metrics, textLen) : null);
+    return conf !== null && conf < 70;
+  });
+
+  const prompt = `Eres un Director Senior de Recursos Humanos y Operaciones de Ellianos Coffee.
+Tu tarea es generar una GUÍA PERSONALIZADA PARA LA SEGUNDA ENTREVISTA PRESENCIAL para el candidato: ${candidateName} (Puesto: ${position || "Barista"}).
+
+=== CONTEXTO DE LA EMPRESA ===
+Ellianos Coffee: Modelo de kiosco de doble carril drive-thru de 800 sq ft, altísima velocidad ("Italian Quality at America's Pace"), 4 a 6 personas por turno en espacio reducido, aperturas de madrugada (desde 4:30 AM), y apertura de nueva tienda en octubre en Lehigh Acres, FL.
+
+=== DATOS DEL CANDIDATO ===
+Nombre: ${candidateName}
+Teléfono: ${candidateInfo?.phone || "No especificado"}
+Email: ${candidateInfo?.email || "No especificado"}
+Idioma predominante en su entrevista virtual: ${isSpanishSpeaker ? "Español" : "Inglés"}
+
+=== EVALUACIÓN PREVIA DE IA ===
+${evaluation || "Sin evaluación previa registrada."}
+
+=== MÉTRICAS DE TELEMETRÍA Y AUTENTICIDAD DE ESCRITURA ===
+${metricsSummary || "Sin telemetría disponible."}
+${lowConfidenceAnswers.length > 0 ? `NOTA: Hubo ${lowConfidenceAnswers.length} respuesta(s) con confianza de autoría humana < 70% o alertas de pegado/baja confianza.` : ""}
+
+=== TRANSCRIPCIÓN DE LA ENTREVISTA VIRTUAL ===
+${(messages || []).map((m: any) => `[${(m.role || "USER").toUpperCase()}]: ${m.parts?.[0]?.text || ""}`).join("\n\n")}
+
+=== INSTRUCCIONES CRÍTICAS PARA LA GUÍA ===
+Genera un objeto JSON que cumpla EXACTAMENTE con el siguiente esquema:
+{
+  "focusPoints": ["3 a 4 frases concisas con los puntos neurálgicos a verificar en este candidato específico."],
+  "interviewerTips": ["3 reglas prácticas y concisas para el entrevistador de RRHH (ej: pedir el caso concreto y números, no acusar sobre IA/asistencia, evaluar ritmo y actitud en vivo)."],
+  "blocks": [
+    {
+      "id": "block_1",
+      "title": "Nombre del bloque",
+      "goal": "Objetivo del bloque",
+      "minutes": 10,
+      "mustPass": true,
+      "questionIds": ["q1", "q2"]
+    }
+  ],
+  "questions": [
+    {
+      "id": "q1",
+      "block": "block_1",
+      "text": "Texto de la pregunta",
+      "language": "es",
+      "purpose": "Una sola frase que explica qué verifica exactamente esta pregunta.",
+      "listenFor": ["2 o 3 señales positivas concretas que el entrevistador debe escuchar"],
+      "redFlags": ["2 o 3 señales de alerta o respuestas evasivas"]
+    }
+  ],
+  "decision": {
+    "hire": "Criterio claro de contratación basado en bloques (ej: Bloques must-pass >= 4.0 y bloque de inglés >= 3.0)",
+    "thirdConversation": "Criterio para tercera conversación o zona gris",
+    "decline": "Criterio de descarte (ej: Cualquier bloque must-pass <= 2.0 o inconsistencias graves)"
+  }
+}
+
+REGLAS DE CONTENIDO:
+1. IDIOMA: La guía es para el entrevistador de RRHH de Ellianos, redactada en español. Las preguntas deben estar en español (language: "es"), EXCEPTO un bloque dedicado a la verificación de inglés funcional (preguntas formuladas en inglés, language: "en"), el cual es OBLIGATORIO si el candidato respondió en español (${isSpanishSpeaker ? "SÍ - es obligatorio incluir bloque de inglés" : "opcional/breve si ya demostró inglés fluido"}).
+2. ESTRUCTURA: Entre 4 y 5 bloques temáticos, 2 a 4 preguntas por bloque, sumando entre 45 y 60 minutos en total.
+   - Bloques sugeridos según el caso:
+     * Experiencia Real Verificable (mustPass: true)
+     * Conocimiento Operativo & Resistencia bajo Presión (mustPass: true)
+     * Inglés Funcional para Atención al Cliente (language: "en") (${isSpanishSpeaker ? "mustPass: true" : "mustPass: false"})
+     * Adaptación al Modelo Ellianos (800 ft², drive-thru doble, aperturas de madrugada, apertura tienda Lehigh Acres en octubre)
+     * Cierre, Honestidad y Compromiso
+   - Marca mustPass: true en los bloques que son eliminatorios.
+3. ANCLAJE OBLIGATORIO EN SU TRANSCRIPCIÓN:
+   - Cita textualmente afirmaciones que el candidato hizo por escrito: "Por escrito mencionaste que [CITA] — cuéntame un caso real donde ocurrió: qué hiciste tú exactamente y cuál fue el resultado numérico/operativo".
+   - Cada debilidad identificada en la evaluación debe tener al menos una pregunta que la explore a fondo.
+   - Cada fortaleza afirmada sin evidencia en la entrevista previa debe tener una pregunta que indague detalles que solo alguien que lo vivió conoce (procedimientos, tiempos, herramientas, volúmenes).
+4. SEÑALES DE AUTENTICIDAD:
+   - Si hubo respuestas con confianza < 70% o pegados de texto, formula preguntas orales profundas sobre esos mismos conceptos para verificar si el conocimiento es genuino.
+   - En el bloque de cierre, incluye una pregunta neutral sobre si se apoyó en herramientas o IA para redactar (enfatizando que la honestidad cuenta a favor, sin acusar).
+5. VALIDACIÓN:
+   - Cada pregunta debe tener un id único (ej: "q1", "q2", ...).
+   - Cada block.questionIds debe contener exactamente los IDs de las preguntas de ese bloque.
+   - Devuelve ÚNICAMENTE el JSON válido, sin texto introductorio ni markdown adicional.`;
+
+  for (let attempt = 1; attempt <= 2; attempt++) {
+    try {
+      const response = await generateContentWithInfiniteResilience({
+        contents: prompt,
+        config: {
+          responseMimeType: "application/json",
+          temperature: 0.2,
+        },
+      });
+
+      const rawText = response?.text || "";
+      const cleanedText = rawText.replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/i, "").trim();
+      const parsed: any = JSON.parse(cleanedText);
+
+      if (!parsed || typeof parsed !== "object") throw new Error("Parsed JSON is not an object");
+      if (!Array.isArray(parsed.focusPoints) || parsed.focusPoints.length < 2) throw new Error("focusPoints must have at least 2 items");
+      if (!Array.isArray(parsed.interviewerTips) || parsed.interviewerTips.length < 2) throw new Error("interviewerTips must have at least 2 items");
+      if (!Array.isArray(parsed.blocks) || parsed.blocks.length < 3) throw new Error("blocks must have at least 3 blocks");
+      if (!Array.isArray(parsed.questions) || parsed.questions.length < 5) throw new Error("questions must have at least 5 questions");
+      if (!parsed.decision || typeof parsed.decision.hire !== "string" || typeof parsed.decision.decline !== "string") {
+        throw new Error("decision criteria missing hire/decline");
+      }
+
+      const qMap = new Map<string, any>();
+      for (const q of parsed.questions) {
+        if (!q.id || !q.text || !q.purpose) throw new Error(`Invalid question format: ${JSON.stringify(q)}`);
+        if (qMap.has(q.id)) throw new Error(`Duplicate question id: ${q.id}`);
+        qMap.set(q.id, q);
+      }
+
+      for (const b of parsed.blocks) {
+        if (!b.id || !b.title || !Array.isArray(b.questionIds) || b.questionIds.length === 0) {
+          throw new Error(`Invalid block format: ${JSON.stringify(b)}`);
+        }
+        for (const qId of b.questionIds) {
+          if (!qMap.has(qId)) throw new Error(`Block ${b.id} references missing question ${qId}`);
+        }
+      }
+
+      const guide: SecondInterviewGuide = {
+        generatedAt: new Date().toISOString(),
+        focusPoints: parsed.focusPoints,
+        interviewerTips: parsed.interviewerTips,
+        blocks: parsed.blocks,
+        questions: parsed.questions,
+        decision: {
+          hire: parsed.decision.hire || "",
+          thirdConversation: parsed.decision.thirdConversation || "",
+          decline: parsed.decision.decline || "",
+        },
+      };
+
+      return guide;
+    } catch (err: any) {
+      console.warn(`[SecondInterviewGuide] Generation attempt ${attempt} failed:`, err.message || err);
+      if (attempt === 2) {
+        throw new Error(`Failed to generate valid Second Interview Guide: ${err.message || "Invalid AI output"}`);
+      }
+    }
+  }
+
+  throw new Error("Failed to generate Second Interview Guide");
 }
 
 function getMailTransporter() {
@@ -485,8 +704,13 @@ app.post("/api/sessions/sync", sessionSyncLimiter, async (req, res) => {
       }
     }
 
-    // Strip deletedAt from candidate sync payload to prevent unauthorized soft-delete modification
-    const { deletedAt: _ignoredDeletedAt, ...cleanSession } = session;
+    // Strip deletedAt and interview guide/scores from candidate sync payload to prevent unauthorized modification
+    const {
+      deletedAt: _ignoredDeletedAt,
+      secondInterviewGuide: _ignoredGuide,
+      secondInterviewScores: _ignoredScores,
+      ...cleanSession
+    } = session;
 
     await upsertSession(cleanSession);
     res.json({ success: true });
@@ -728,6 +952,102 @@ Lehigh Acres, FL`;
   }
 });
 
+// Second Interview Guide Generation Endpoint
+app.post("/api/admin/sessions/:id/second-interview-guide", secondInterviewGuideLimiter, async (req, res) => {
+  const authHeader = req.headers["x-admin-passcode"] as string | undefined;
+  if (!verifyAdminAccess(authHeader, res)) return;
+
+  const { id } = req.params;
+  const { force } = req.body || {};
+
+  try {
+    const sessions = await getStoredSessions();
+    const session = sessions.find((s) => s.id === id);
+    if (!session) {
+      return res.status(404).json({ success: false, error: "Session not found" });
+    }
+
+    if (session.secondInterviewGuide && !force) {
+      return res.json({ success: true, guide: session.secondInterviewGuide });
+    }
+
+    const guide = await generateSecondInterviewGuide(session);
+    
+    const updatedSession = {
+      ...session,
+      secondInterviewGuide: guide,
+      secondInterviewScores: force ? undefined : session.secondInterviewScores,
+    };
+    if (force) {
+      delete updatedSession.secondInterviewScores;
+    }
+
+    await upsertSession(updatedSession);
+    return res.json({ success: true, guide });
+  } catch (err: any) {
+    console.error("[SecondInterviewGuide] Error generating guide:", err);
+    return res.status(503).json({
+      success: false,
+      error: err.message || "La IA no está disponible ahora; inténtalo más tarde.",
+    });
+  }
+});
+
+// Second Interview Live Scoring and Notes Update Endpoint
+app.put("/api/admin/sessions/:id/second-interview-scores", async (req, res) => {
+  const authHeader = req.headers["x-admin-passcode"] as string | undefined;
+  if (!verifyAdminAccess(authHeader, res)) return;
+
+  const { id } = req.params;
+  const { scores, notes } = req.body || {};
+
+  try {
+    const sessions = await getStoredSessions();
+    const session = sessions.find((s) => s.id === id);
+    if (!session) {
+      return res.status(404).json({ success: false, error: "Session not found" });
+    }
+
+    const validQuestionIds = new Set((session.secondInterviewGuide?.questions || []).map((q: any) => q.id));
+    const sanitizedScores: Record<string, number> = {};
+    if (scores && typeof scores === "object") {
+      for (const [qId, val] of Object.entries(scores)) {
+        if (typeof val === "number" && Number.isInteger(val) && val >= 1 && val <= 5) {
+          if (validQuestionIds.size === 0 || validQuestionIds.has(qId)) {
+            sanitizedScores[qId] = val;
+          }
+        }
+      }
+    }
+
+    const sanitizedNotes: Record<string, string> = {};
+    if (notes && typeof notes === "object") {
+      for (const [qId, val] of Object.entries(notes)) {
+        if (typeof val === "string") {
+          sanitizedNotes[qId] = val.slice(0, 2000);
+        }
+      }
+    }
+
+    const secondInterviewScores: SecondInterviewScores = {
+      scores: sanitizedScores,
+      notes: sanitizedNotes,
+      updatedAt: new Date().toISOString(),
+    };
+
+    const updatedSession = {
+      ...session,
+      secondInterviewScores,
+    };
+
+    await upsertSession(updatedSession);
+    return res.json({ success: true, scores: secondInterviewScores });
+  } catch (err: any) {
+    console.error("[SecondInterviewScores] Error saving scores:", err);
+    return res.status(500).json({ success: false, error: "Failed to save scores" });
+  }
+});
+
 // Candidate Live Chat Endpoint
 app.post("/api/chat", chatLimiter, async (req, res) => {
   try {
@@ -863,16 +1183,32 @@ ${(messages || []).map((m: any) => `[${(m.role || "USER").toUpperCase()}]: ${m.p
       evaluationText = generateLocalEvaluation(session);
     }
 
+    // Auto-generate Second Interview Guide if recommendation suggests second interview
+    let generatedGuide: SecondInterviewGuide | null = null;
+    const isSecondInterviewRecommended = /second\s*interview/i.test(evaluationText);
+    if (isSecondInterviewRecommended) {
+      try {
+        console.log(`[Evaluate] Second interview recommended for ${candidateInfo.name}. Auto-generating guide...`);
+        generatedGuide = await generateSecondInterviewGuide({
+          ...session,
+          evaluation: evaluationText,
+        });
+      } catch (guideErr) {
+        console.warn("[Evaluate] Non-blocking second interview guide auto-generation failed:", guideErr);
+      }
+    }
+
     // Send the email if SMTP credentials are configured (non-blocking)
     let emailSent = false;
     const transporter = getMailTransporter();
     if (transporter) {
       try {
+        const guideSection = generatedGuide ? `\n\n${formatGuideAsPlainText(generatedGuide)}` : "";
         const mailOptions = {
           from: process.env.EMAIL_USER,
           to: "accounting@jjpartnersco.com",
           subject: `New Interview Application: ${candidateInfo.name} - ${position}`,
-          text: `Candidate: ${candidateInfo.name}\nEmail: ${candidateInfo.email}\nPhone: ${candidateInfo.phone}\nPosition: ${position}\n\n=== AI EVALUATION ===\n${evaluationText}\n\n=== TRANSCRIPT ===\n${(messages || []).map((m: any) => `[${(m.role || "USER").toUpperCase()}]: ${m.parts?.[0]?.text || ""}`).join("\n\n")}`,
+          text: `Candidate: ${candidateInfo.name}\nEmail: ${candidateInfo.email}\nPhone: ${candidateInfo.phone}\nPosition: ${position}\n\n=== AI EVALUATION ===\n${evaluationText}${guideSection}\n\n=== TRANSCRIPT ===\n${(messages || []).map((m: any) => `[${(m.role || "USER").toUpperCase()}]: ${m.parts?.[0]?.text || ""}`).join("\n\n")}`,
         };
 
         await transporter.sendMail(mailOptions);
@@ -890,6 +1226,7 @@ ${(messages || []).map((m: any) => `[${(m.role || "USER").toUpperCase()}]: ${m.p
         status: "Completed",
         evaluation: evaluationText,
         emailSent,
+        secondInterviewGuide: generatedGuide || session.secondInterviewGuide,
       });
     } catch (saveErr) {
       console.warn("[Storage] Failed to persist completed session:", saveErr);

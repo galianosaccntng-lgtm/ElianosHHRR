@@ -25,6 +25,44 @@ export interface Message {
   metrics?: TypingMetrics;
 }
 
+export interface SecondInterviewQuestion {
+  id: string;
+  block: string;
+  text: string;
+  language: 'es' | 'en';
+  purpose: string;
+  listenFor: string[];
+  redFlags: string[];
+}
+
+export interface SecondInterviewBlock {
+  id: string;
+  title: string;
+  goal: string;
+  minutes: number;
+  mustPass: boolean;
+  questionIds: string[];
+}
+
+export interface SecondInterviewGuide {
+  generatedAt: string;
+  focusPoints: string[];
+  interviewerTips: string[];
+  blocks: SecondInterviewBlock[];
+  questions: SecondInterviewQuestion[];
+  decision: {
+    hire: string;
+    thirdConversation: string;
+    decline: string;
+  };
+}
+
+export interface SecondInterviewScores {
+  scores: Record<string, number>;
+  notes: Record<string, string>;
+  updatedAt: string;
+}
+
 export interface InterviewSession {
   id: string;
   position: Position;
@@ -36,6 +74,8 @@ export interface InterviewSession {
   evaluation?: string;
   emailSent?: boolean;
   followUpSentAt?: string;
+  secondInterviewGuide?: SecondInterviewGuide;
+  secondInterviewScores?: SecondInterviewScores;
 }
 
 
