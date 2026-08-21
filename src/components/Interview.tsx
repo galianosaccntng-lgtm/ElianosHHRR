@@ -4,6 +4,7 @@ import { Send, ArrowLeft, Bot, User, Loader2, CheckCircle, PartyPopper, RefreshC
 import Markdown from 'react-markdown';
 import clsx from 'clsx';
 import confetti from 'canvas-confetti';
+import { humanConfidence } from '../authenticity';
 
 interface InterviewProps {
   session: InterviewSession;
@@ -18,6 +19,8 @@ export function Interview({ session, onBack, onUpdateSession }: InterviewProps) 
   const [isSuccess, setIsSuccess] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [showPasteWarning, setShowPasteWarning] = useState(false);
+  const [showLowConfidenceWarning, setShowLowConfidenceWarning] = useState(false);
+  const [hasBeenWarnedForCurrentAnswer, setHasBeenWarnedForCurrentAnswer] = useState(false);
   
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -155,8 +158,7 @@ export function Interview({ session, onBack, onUpdateSession }: InterviewProps) 
     initChat();
   }, [session.id, session.messages?.length]);
 
-  const handleSend = async (e?: React.FormEvent) => {
-    if (e) e.preventDefault();
+  const executeSend = async (bypassWarning = false) => {
     const textToSend = input.trim();
     if (!textToSend || isLoading || isSubmitting) return;
 
@@ -181,7 +183,31 @@ export function Interview({ session, onBack, onUpdateSession }: InterviewProps) 
       pasteAttempts: pasteAttemptsRef.current,
     };
 
-    // Reset telemetry contadores for next answer
+    let calculatedConfidence: number | null = null;
+    try {
+      calculatedConfidence = humanConfidence(metrics, textToSend.length);
+    } catch (calcErr) {
+      console.warn('Error calculating human confidence:', calcErr);
+    }
+
+    if (calculatedConfidence !== null) {
+      metrics.humanConfidence = calculatedConfidence;
+    }
+
+    // Check if low confidence warning is needed (< 35%) and not yet warned
+    if (!bypassWarning && calculatedConfidence !== null && calculatedConfidence < 35 && !hasBeenWarnedForCurrentAnswer) {
+      setShowLowConfidenceWarning(true);
+      return;
+    }
+
+    if (bypassWarning || hasBeenWarnedForCurrentAnswer) {
+      metrics.lowConfidenceWarned = true;
+    }
+
+    // Reset warning state and telemetry counters for next answer
+    setShowLowConfidenceWarning(false);
+    setHasBeenWarnedForCurrentAnswer(false);
+
     firstKeystrokeTimeRef.current = null;
     keystrokesRef.current = 0;
     maxInsertChunkRef.current = 0;
@@ -231,6 +257,29 @@ export function Interview({ session, onBack, onUpdateSession }: InterviewProps) 
     } finally {
       setIsLoading(false);
     }
+  };
+
+  const handleSend = async (e?: React.FormEvent) => {
+    if (e) e.preventDefault();
+    executeSend(false);
+  };
+
+  const handleRewrite = () => {
+    setShowLowConfidenceWarning(false);
+    setHasBeenWarnedForCurrentAnswer(false);
+    firstKeystrokeTimeRef.current = null;
+    keystrokesRef.current = 0;
+    maxInsertChunkRef.current = 0;
+    tabSwitchesRef.current = 0;
+    pasteAttemptsRef.current = 0;
+    lastInputLengthRef.current = input.length;
+    textareaRef.current?.focus();
+  };
+
+  const handleSendAsIs = () => {
+    setShowLowConfidenceWarning(false);
+    setHasBeenWarnedForCurrentAnswer(true);
+    executeSend(true);
   };
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
@@ -467,6 +516,33 @@ export function Interview({ session, onBack, onUpdateSession }: InterviewProps) 
       {/* Input Area */}
       <div className="bg-white border-t border-[#E8DFD8] p-4 shrink-0">
         <div className="max-w-3xl mx-auto">
+          {showLowConfidenceWarning && (
+            <div className="mb-3 p-4 bg-amber-50 border border-amber-200 rounded-2xl text-amber-900 shadow-sm animate-in fade-in slide-in-from-bottom-2 duration-300">
+              <div className="flex items-start gap-2.5 mb-3">
+                <AlertCircle className="w-5 h-5 text-amber-700 shrink-0 mt-0.5" />
+                <p className="text-xs leading-relaxed text-amber-900 font-light">
+                  We'd love to hear this in your own words! Your answer looks like it may have been pasted or written elsewhere. Interviews work best when you just tell us what you think &mdash; there are no wrong answers.
+                </p>
+              </div>
+              <div className="flex items-center justify-end gap-2 text-xs">
+                <button
+                  type="button"
+                  onClick={handleRewrite}
+                  className="px-3.5 py-1.5 bg-white border border-amber-300 text-amber-900 font-medium rounded-xl hover:bg-amber-100 transition-colors cursor-pointer"
+                >
+                  Let me rewrite it
+                </button>
+                <button
+                  type="button"
+                  onClick={handleSendAsIs}
+                  className="px-3.5 py-1.5 bg-[#4B2C20] text-[#FAF7F2] font-medium rounded-xl hover:bg-[#3E2723] transition-colors cursor-pointer"
+                >
+                  Send as is
+                </button>
+              </div>
+            </div>
+          )}
+
           {showPasteWarning && (
             <div className="mb-2.5 px-4 py-2.5 bg-amber-50 border border-amber-200 rounded-xl text-xs text-amber-900 flex items-center gap-2 shadow-sm animate-in fade-in slide-in-from-bottom-2 duration-300">
               <AlertCircle className="w-4 h-4 text-amber-700 shrink-0" />

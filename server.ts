@@ -6,6 +6,7 @@ import { GoogleGenAI } from "@google/genai";
 import dotenv from "dotenv";
 import nodemailer from "nodemailer";
 import { Firestore } from "@google-cloud/firestore";
+import { humanConfidence } from "./src/authenticity";
 
 dotenv.config();
 
@@ -160,6 +161,7 @@ function sanitizeSessionMessages(messages: any[]): any[] {
         tabSwitches,
         wpm,
         pasteAttempts,
+        lowConfidenceWarned,
       } = m.metrics;
 
       const sanitizedMetrics: any = {};
@@ -170,8 +172,14 @@ function sanitizeSessionMessages(messages: any[]): any[] {
       if (typeof tabSwitches === "number" && !isNaN(tabSwitches)) sanitizedMetrics.tabSwitches = tabSwitches;
       if (typeof wpm === "number" && !isNaN(wpm)) sanitizedMetrics.wpm = wpm;
       if (typeof pasteAttempts === "number" && !isNaN(pasteAttempts)) sanitizedMetrics.pasteAttempts = pasteAttempts;
+      if (typeof lowConfidenceWarned === "boolean") sanitizedMetrics.lowConfidenceWarned = lowConfidenceWarned;
 
       if (Object.keys(sanitizedMetrics).length > 0) {
+        const textLen = sanitizedMsg.parts?.[0]?.text?.length || 0;
+        const computedConf = humanConfidence(sanitizedMetrics, textLen);
+        if (computedConf !== null) {
+          sanitizedMetrics.humanConfidence = computedConf;
+        }
         sanitizedMsg.metrics = sanitizedMetrics;
       }
     }
@@ -327,6 +335,31 @@ function generateLocalEvaluation(session: any): string {
   const userResponses = (messages || []).filter((m: any) => m.role === "user");
   const totalAnswers = userResponses.length;
 
+  const responsesWithMetrics = userResponses.filter((m: any) => m.metrics);
+  let authenticityBlock = "";
+
+  if (responsesWithMetrics.length > 0) {
+    const scores: { index: number; score: number }[] = responsesWithMetrics.map((m: any, i: number) => {
+      const textLen = m.parts?.[0]?.text?.length || 0;
+      const score = typeof m.metrics.humanConfidence === "number"
+        ? m.metrics.humanConfidence
+        : (humanConfidence(m.metrics, textLen) ?? 100);
+      return { index: i + 1, score };
+    });
+
+    const avgConfidence = Math.round(scores.reduce((sum, item) => sum + item.score, 0) / scores.length);
+    const minItem = scores.reduce((min, curr) => curr.score < min.score ? curr : min, scores[0]);
+
+    authenticityBlock = `### Authenticity Signals
+- **Confianza promedio de autoría humana:** ${avgConfidence}%
+- **Respuesta con menor confianza:** Respuesta #${minItem.index} (${minItem.score}%)
+- **Métricas:** Consulte el panel de RRHH para ver detalles de velocidad de escritura (WPM), cambios de pestaña e intentos de pegado por respuesta.`;
+  } else {
+    authenticityBlock = `### Authenticity Signals
+- **Confianza de autoría humana:** Sin datos de telemetría.
+- **Métricas:** No se registraron datos de telemetría en esta sesión.`;
+  }
+
   return `# Candidate Interview Record (Manual Review Required)
 
 **Candidate Name:** ${candidateName}  
@@ -340,9 +373,7 @@ function generateLocalEvaluation(session: any): string {
 ### AI Evaluation Status: Unavailable
 La evaluación con IA no estaba disponible en el momento del envío. No se generó puntaje ni recomendación automática. Por favor revise la transcripción completa manualmente para evaluar la idoneidad del candidato.
 
-### Authenticity Signals
-- **Nivel de preocupación:** N/A (Evaluación automática no disponible).
-- **Métricas:** Consulte el panel de RRHH para ver detalles de velocidad de escritura (WPM), cambios de pestaña e intentos de pegado.`;
+${authenticityBlock}`;
 }
 
 async function generateContentWithInfiniteResilience(request: any) {
@@ -750,7 +781,12 @@ app.post("/api/evaluate-and-send", evaluateLimiter, async (req, res) => {
           }
           const durSec = ((metrics.typingDurationMs || 0) / 1000).toFixed(1);
           const delaySec = ((metrics.responseDelayMs || 0) / 1000).toFixed(1);
-          return `Response ${idx + 1} (${text.length} chars): WPM: ${metrics.wpm || 0}, Duration: ${durSec}s, Paste Attempts: ${metrics.pasteAttempts || 0}, Max Insert Chunk: ${metrics.maxInsertChunk || 0}, Tab Switches: ${metrics.tabSwitches || 0}, Response Delay: ${delaySec}s, Keystrokes: ${metrics.keystrokes || 0}`;
+          const conf = typeof metrics.humanConfidence === "number"
+            ? metrics.humanConfidence
+            : humanConfidence(metrics, text.length);
+          const confStr = conf !== null ? `${conf}%` : "N/A";
+          const warnedStr = metrics.lowConfidenceWarned ? ", Candidate Warned: Yes" : "";
+          return `Response ${idx + 1} (${text.length} chars): Human-authorship confidence: ${confStr}, WPM: ${metrics.wpm || 0}, Duration: ${durSec}s, Paste Attempts: ${metrics.pasteAttempts || 0}, Max Insert Chunk: ${metrics.maxInsertChunk || 0}, Tab Switches: ${metrics.tabSwitches || 0}, Response Delay: ${delaySec}s, Keystrokes: ${metrics.keystrokes || 0}${warnedStr}`;
         })
         .join("\n");
 
@@ -767,7 +803,7 @@ You must include:
 2. A summary of their strengths.
 3. A summary of their weaknesses or areas of concern.
 4. A final recommendation (Hire, Do Not Hire, or Second Interview).
-5. AUTHENTICITY ASSESSMENT: Using the typing metrics AND the writing style, add a section titled 'Authenticity Signals' with a level (Low / Medium / High concern) and the specific evidence. Consider: paste attempts, unusually high WPM (>80 sustained), large single-event text insertions, tab switches right before polished answers, very short response delays for long complex answers, and abrupt style/register shifts between answers. IMPORTANT: these are signals for the hiring team to probe in a live follow-up interview, NOT grounds for automatic rejection. Non-native English speakers may write formally; do not flag formal writing alone. Never lower the candidate's score solely because of authenticity signals — report them separately.
+5. AUTHENTICITY ASSESSMENT: For each response you are given a computed human-authorship confidence percentage (from typing behavior). In the 'Authenticity Signals' section, report: the average confidence, the lowest-confidence answer (number and percentage), and whether the writing-style analysis agrees or disagrees with these numbers. Answers below 35% should be explicitly listed. Remember: these are signals for follow-up, never automatic rejection. Consider: paste attempts, unusually high WPM (>80 sustained), large single-event text insertions, tab switches right before polished answers, very short response delays for long complex answers, and abrupt style/register shifts between answers. Non-native English speakers may write formally; do not flag formal writing alone. Never lower the candidate's score solely because of authenticity signals — report them separately.
 
 Candidate Typing Metrics per Response:
 ${metricsSummary || "No typing telemetry available."}

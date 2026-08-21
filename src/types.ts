@@ -15,6 +15,8 @@ export interface TypingMetrics {
   tabSwitches: number;
   wpm: number;
   pasteAttempts?: number;
+  humanConfidence?: number;
+  lowConfidenceWarned?: boolean;
 }
 
 export interface Message {
