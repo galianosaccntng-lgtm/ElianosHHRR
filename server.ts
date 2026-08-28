@@ -14,6 +14,8 @@ import { SecondInterviewGuide, SecondInterviewScores } from "./src/types";
 
 dotenv.config();
 
+const MAIL_FROM = `"Ellianos Coffee" <${process.env.EMAIL_USER}>`;
+
 const app = express();
 app.set("trust proxy", true);
 
@@ -962,7 +964,7 @@ Lehigh Acres, FL`;
 
     try {
       await transporter.sendMail({
-        from: process.env.EMAIL_USER,
+        from: MAIL_FROM,
         to: email,
         subject: mailSubject,
         text: mailBody,
@@ -1245,7 +1247,7 @@ ${(messages || []).map((m: any) => `[${(m.role || "USER").toUpperCase()}]: ${m.p
       try {
         const guideSection = generatedGuide ? `\n\n${formatGuideAsPlainText(generatedGuide)}` : "";
         const mailOptions = {
-          from: process.env.EMAIL_USER,
+          from: MAIL_FROM,
           to: "accounting@jjpartnersco.com",
           subject: `New Interview Application: ${candidateInfo.name} - ${position}`,
           text: `Candidate: ${candidateInfo.name}\nEmail: ${candidateInfo.email}\nPhone: ${candidateInfo.phone}\nPosition: ${position}\n\n=== AI EVALUATION ===\n${evaluationText}${guideSection}\n\n=== TRANSCRIPT ===\n${(messages || []).map((m: any) => `[${(m.role || "USER").toUpperCase()}]: ${m.parts?.[0]?.text || ""}`).join("\n\n")}`,
@@ -1310,7 +1312,7 @@ async function sendOnboardingEmail(session: any): Promise<boolean> {
 
   try {
     await transporter.sendMail({
-      from: process.env.EMAIL_USER,
+      from: MAIL_FROM,
       to: session.candidateInfo.email,
       subject,
       text,
