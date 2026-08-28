@@ -4,6 +4,7 @@ import { ArrowLeft, CheckCircle2, MessageSquare, ChevronRight, FileText, Trash2,
 import clsx from 'clsx';
 import Markdown from 'react-markdown';
 import { humanConfidence } from '../authenticity';
+import { adminI18n, AdminLang, getInitialAdminLang, setSavedAdminLang } from '../i18n-admin';
 
 interface DashboardProps {
   adminToken: string | null;
@@ -16,35 +17,40 @@ interface DashboardProps {
 
 const STORAGE_KEY = 'ellianos_candidate_sessions_v1';
 
-export function formatGuideAsPlainText(guide: SecondInterviewGuide): string {
-  let out = `=== GUÍA PARA SEGUNDA ENTREVISTA ===\n\n`;
-  out += `PUNTOS DE ENFOQUE A VERIFICAR:\n`;
+export function formatGuideAsPlainText(guide: SecondInterviewGuide, lang: AdminLang = 'es'): string {
+  const isEn = lang === 'en';
+  let out = isEn ? `=== 2ND INTERVIEW GUIDE ===\n\n` : `=== GUÍA PARA SEGUNDA ENTREVISTA ===\n\n`;
+  out += isEn ? `KEY FOCUS POINTS TO VERIFY:\n` : `PUNTOS DE ENFOQUE A VERIFICAR:\n`;
   (guide.focusPoints || []).forEach((pt, i) => {
     out += `${i + 1}. ${pt}\n`;
   });
-  out += `\nCONSEJOS PARA EL ENTREVISTADOR:\n`;
+  out += isEn ? `\nINTERVIEWER INQUIRY TIPS:\n` : `\nCONSEJOS PARA EL ENTREVISTADOR:\n`;
   (guide.interviewerTips || []).forEach((tip) => {
     out += `* ${tip}\n`;
   });
   const totalMins = (guide.blocks || []).reduce((acc, b) => acc + (b.minutes || 0), 0);
-  out += `\nBLOQUES DE LA ENTREVISTA (${totalMins} MINUTOS TOTAL):\n`;
+  out += isEn ? `\nINTERVIEW BLOCKS (${totalMins} TOTAL MINUTES):\n` : `\nBLOQUES DE LA ENTREVISTA (${totalMins} MINUTOS TOTAL):\n`;
   (guide.blocks || []).forEach((block, bIdx) => {
     out += `\n------------------------------------------------------------\n`;
-    out += `BLOQUE ${bIdx + 1}: ${block.title.toUpperCase()} (${block.minutes} min) ${block.mustPass ? '[ELIMINATORIO / MUST PASS]' : '[FORMATIVO / OP]'}\n`;
-    out += `Objetivo: ${block.goal}\n\n`;
+    out += isEn
+      ? `BLOCK ${bIdx + 1}: ${block.title.toUpperCase()} (${block.minutes} min) ${block.mustPass ? '[ELIMINATORY / MUST PASS]' : '[FORMATIVE / OP]'}\n`
+      : `BLOQUE ${bIdx + 1}: ${block.title.toUpperCase()} (${block.minutes} min) ${block.mustPass ? '[ELIMINATORIO / MUST PASS]' : '[FORMATIVO / OP]'}\n`;
+    out += isEn ? `Goal: ${block.goal}\n\n` : `Objetivo: ${block.goal}\n\n`;
     const bQuestions = (guide.questions || []).filter((q) => (block.questionIds || []).includes(q.id));
     bQuestions.forEach((q, qIdx) => {
-      out += `Pregunta ${bIdx + 1}.${qIdx + 1} [${(q.language || 'es').toUpperCase()}]: "${q.text}"\n`;
-      out += `  - Propósito: ${q.purpose}\n`;
-      out += `  - Escuchar (Buena señal): ${(q.listenFor || []).join('; ')}\n`;
-      out += `  - Alertas (Red Flags): ${(q.redFlags || []).join('; ')}\n\n`;
+      out += isEn
+        ? `Question ${bIdx + 1}.${qIdx + 1} [${(q.language || 'es').toUpperCase()}]: "${q.text}"\n`
+        : `Pregunta ${bIdx + 1}.${qIdx + 1} [${(q.language || 'es').toUpperCase()}]: "${q.text}"\n`;
+      out += isEn ? `  - Purpose: ${q.purpose}\n` : `  - Propósito: ${q.purpose}\n`;
+      out += isEn ? `  - Listen for (Good signal): ${(q.listenFor || []).join('; ')}\n` : `  - Escuchar (Buena señal): ${(q.listenFor || []).join('; ')}\n`;
+      out += isEn ? `  - Alerts (Red flags): ${(q.redFlags || []).join('; ')}\n\n` : `  - Alertas (Red Flags): ${(q.redFlags || []).join('; ')}\n\n`;
     });
   });
   out += `------------------------------------------------------------\n`;
-  out += `CRITERIOS DE DECISIÓN:\n`;
-  out += `* Contratar: ${guide.decision?.hire || 'N/A'}\n`;
-  out += `* Tercera Conversación: ${guide.decision?.thirdConversation || 'N/A'}\n`;
-  out += `* Declinar: ${guide.decision?.decline || 'N/A'}\n`;
+  out += isEn ? `DECISION CRITERIA:\n` : `CRITERIOS DE DECISIÓN:\n`;
+  out += isEn ? `* Hire: ${guide.decision?.hire || 'N/A'}\n` : `* Contratar: ${guide.decision?.hire || 'N/A'}\n`;
+  out += isEn ? `* Third Conversation: ${guide.decision?.thirdConversation || 'N/A'}\n` : `* Tercera Conversación: ${guide.decision?.thirdConversation || 'N/A'}\n`;
+  out += isEn ? `* Decline: ${guide.decision?.decline || 'N/A'}\n` : `* Declinar: ${guide.decision?.decline || 'N/A'}\n`;
   return out;
 }
 
@@ -124,11 +130,14 @@ export function getSessionAuthenticitySummary(session: InterviewSession) {
   };
 }
 
-function formatInterviewDate(dateStr?: string): string {
-  if (!dateStr) return 'Fecha Reciente';
+function formatInterviewDate(dateStr?: string, lang: AdminLang = 'es'): string {
+  const t = adminI18n[lang];
+  if (!dateStr) return t.recentDate;
   const d = new Date(dateStr);
-  if (isNaN(d.getTime())) return 'Fecha Reciente';
-  return `${d.toLocaleDateString()} a las ${d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`;
+  if (isNaN(d.getTime())) return t.recentDate;
+  const dateFormatted = d.toLocaleDateString(t.localeCode);
+  const timeFormatted = d.toLocaleTimeString(t.localeCode, { hour: '2-digit', minute: '2-digit' });
+  return t.dateAtTime(dateFormatted, timeFormatted);
 }
 
 function getDaysRemaining(deletedAt?: string | null): number {
@@ -140,6 +149,14 @@ function getDaysRemaining(deletedAt?: string | null): number {
 }
 
 export function Dashboard({ adminToken, onBack, onLogout, onResume, onDelete, onSessionsUpdated }: DashboardProps) {
+  const [lang, setLang] = useState<AdminLang>(getInitialAdminLang);
+  const t = adminI18n[lang];
+
+  const handleToggleLang = (newLang: AdminLang) => {
+    setLang(newLang);
+    setSavedAdminLang(newLang);
+  };
+
   const [sessions, setSessions] = useState<InterviewSession[]>(() => {
     try {
       const saved = localStorage.getItem(STORAGE_KEY);
@@ -343,7 +360,7 @@ export function Dashboard({ adminToken, onBack, onLogout, onResume, onDelete, on
 
   const handleGenerateGuide = async (force = false) => {
     if (!selectedSession || !adminToken || isGeneratingGuide) return;
-    if (force && !window.confirm("Se reemplazará la guía actual y se borrarán las puntuaciones registradas. ¿Deseas continuar?")) {
+    if (force && !window.confirm(t.guideConfirmForce)) {
       return;
     }
 
@@ -357,12 +374,12 @@ export function Dashboard({ adminToken, onBack, onLogout, onResume, onDelete, on
           'Content-Type': 'application/json',
           'x-admin-passcode': adminToken,
         },
-        body: JSON.stringify({ force }),
+        body: JSON.stringify({ force, lang }),
       });
 
       const data = await res.json();
       if (!res.ok || !data.success || !data.guide) {
-        throw new Error(data.error || "La IA no está disponible ahora; inténtalo más tarde.");
+        throw new Error(data.error || t.guideAiErrorDefault);
       }
 
       const updatedSession: InterviewSession = {
@@ -386,14 +403,14 @@ export function Dashboard({ adminToken, onBack, onLogout, onResume, onDelete, on
       }
     } catch (err: any) {
       console.error('Failed to generate second interview guide:', err);
-      setGuideError(err.message || "La IA no está disponible ahora; inténtalo más tarde.");
+      setGuideError(err.message || t.guideAiErrorDefault);
     } finally {
       setIsGeneratingGuide(false);
     }
   };
 
   const handleCopyGuide = (guide: SecondInterviewGuide) => {
-    const text = formatGuideAsPlainText(guide);
+    const text = formatGuideAsPlainText(guide, lang);
     navigator.clipboard.writeText(text);
     setCopiedGuide(true);
     setTimeout(() => setCopiedGuide(false), 2000);
@@ -401,7 +418,7 @@ export function Dashboard({ adminToken, onBack, onLogout, onResume, onDelete, on
 
   // Soft delete: moves to trash
   const handleDelete = async (id: string, name: string) => {
-    if (!window.confirm(`¿Mover la entrevista de ${name || 'este candidato'} a la papelera? Podrás restaurarla durante 30 días.`)) {
+    if (!window.confirm(t.confirmMoveToTrash(name || t.applicantFallback))) {
       return;
     }
     const deletedAt = new Date().toISOString();
@@ -443,7 +460,7 @@ export function Dashboard({ adminToken, onBack, onLogout, onResume, onDelete, on
 
   // Permanent deletion from trash
   const handlePermanentDelete = async (id: string, name: string) => {
-    if (!window.confirm(`Esta acción NO se puede deshacer. ¿Eliminar definitivamente la entrevista de ${name || 'este candidato'}?`)) {
+    if (!window.confirm(t.confirmPermanentDelete(name || t.applicantFallback))) {
       return;
     }
     const updatedList = sessions.filter(s => s.id !== id);
@@ -466,22 +483,29 @@ export function Dashboard({ adminToken, onBack, onLogout, onResume, onDelete, on
     if (!selectedSession) return;
     const text = selectedSession.messages
       .filter((_, i) => i > 0)
-      .map(m => `[${m.role === 'model' ? 'Ellianos AI' : (selectedSession.candidateInfo?.name || 'Applicant')}]:\n${m.parts?.[0]?.text || ''}`)
+      .map(m => `[${m.role === 'model' ? t.virtualInterviewerRole : (selectedSession.candidateInfo?.name || t.applicantFallback)}]:\n${m.parts?.[0]?.text || ''}`)
       .join('\n\n---\n\n');
 
-    navigator.clipboard.writeText(text || 'No hay transcripción registrada para este candidato.');
+    navigator.clipboard.writeText(text || t.noTranscriptRecorded);
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
   };
 
   const handleCopyContact = () => {
     if (!selectedSession) return;
-    const contactText = `CANDIDATO: ${selectedSession.candidateInfo?.name || 'Sin Nombre'}
-POSICIÓN: ${selectedSession.position || 'No especificada'}
-TELÉFONO: ${selectedSession.candidateInfo?.phone || 'No registrado'}
-EMAIL: ${selectedSession.candidateInfo?.email || 'No registrado'}
-FECHA DE APLICACIÓN: ${formatInterviewDate(selectedSession.date)}
-ESTADO: ${getEffectiveStatus(selectedSession)}`;
+    const effectiveStatus = getEffectiveStatus(selectedSession);
+    const effectiveStatusLabel = effectiveStatus === 'Completed'
+      ? t.badgeCompleted
+      : effectiveStatus === 'In Progress'
+      ? t.badgeInProgress
+      : t.badgeIncomplete;
+
+    const contactText = `${t.copyContactHeader} ${selectedSession.candidateInfo?.name || t.unnamedApplicant}
+${t.copyContactPosition} ${selectedSession.position || t.notSpecified}
+${t.copyContactPhone} ${selectedSession.candidateInfo?.phone || t.notRegistered}
+${t.copyContactEmail} ${selectedSession.candidateInfo?.email || t.notRegistered}
+${t.copyContactDate} ${formatInterviewDate(selectedSession.date, lang)}
+${t.copyContactStatus} ${effectiveStatusLabel}`;
 
     navigator.clipboard.writeText(contactText);
     setCopiedContact(true);
@@ -510,7 +534,7 @@ ESTADO: ${getEffectiveStatus(selectedSession)}`;
       }
     } catch (e) {
       console.error('Failed to generate evaluation:', e);
-      alert('No se pudo generar la evaluación en este momento.');
+      alert(t.evalGenerationError);
     } finally {
       setIsEvaluating(false);
     }
@@ -520,7 +544,7 @@ ESTADO: ${getEffectiveStatus(selectedSession)}`;
     if (!session || !session.id || !adminToken || isSendingFollowUp) return;
     const email = session.candidateInfo?.email;
     if (!email) {
-      alert('El candidato no tiene un correo electrónico registrado.');
+      alert(t.followUpNoEmail);
       return;
     }
 
@@ -537,7 +561,7 @@ ESTADO: ${getEffectiveStatus(selectedSession)}`;
 
       const data = await res.json().catch(() => ({}));
       if (!res.ok || !data.success) {
-        throw new Error(data.error || 'No se pudo enviar el correo de seguimiento.');
+        throw new Error(data.error || t.followUpDefaultError);
       }
 
       const followUpDate = data.followUpSentAt || new Date().toISOString();
@@ -557,7 +581,7 @@ ESTADO: ${getEffectiveStatus(selectedSession)}`;
       }, 4000);
     } catch (err: any) {
       console.error('Failed to send follow-up email:', err);
-      setFollowUpError(err.message || 'Error al enviar correo de seguimiento.');
+      setFollowUpError(err.message || t.followUpErrorGeneric);
       setTimeout(() => {
         setFollowUpError(null);
       }, 6000);
@@ -599,14 +623,45 @@ ESTADO: ${getEffectiveStatus(selectedSession)}`;
           </button>
           <div className="flex items-center gap-2">
             <ShieldCheck className="w-5 h-5 text-[#D4A373]" />
-            <span className="font-serif font-bold text-lg text-[#4B2C20]">Candidate Dashboard</span>
+            <span className="font-serif font-bold text-lg text-[#4B2C20]">{t.dashboardTitle}</span>
             <span className="bg-[#4B2C20] text-[#FAF7F2] text-[10px] uppercase font-bold tracking-widest px-2 py-0.5 rounded-md">
-              RRHH
+              {t.hrBadge}
             </span>
           </div>
         </div>
 
         <div className="flex items-center gap-2 md:gap-3">
+          {/* Language Selector EN | ES Toggle */}
+          <div className="flex items-center bg-[#FAF7F2] border border-[#E8DFD8] rounded-xl p-0.5 shadow-2xs">
+            <button
+              type="button"
+              onClick={() => handleToggleLang('es')}
+              className={clsx(
+                "px-2.5 py-1 text-xs font-bold rounded-lg transition-all",
+                lang === 'es'
+                  ? "bg-[#4B2C20] text-[#FAF7F2] shadow-xs"
+                  : "text-[#4B2C20]/60 hover:text-[#4B2C20]"
+              )}
+              aria-label="Español"
+            >
+              ES
+            </button>
+            <span className="text-xs text-[#E8DFD8] px-0.5">|</span>
+            <button
+              type="button"
+              onClick={() => handleToggleLang('en')}
+              className={clsx(
+                "px-2.5 py-1 text-xs font-bold rounded-lg transition-all",
+                lang === 'en'
+                  ? "bg-[#4B2C20] text-[#FAF7F2] shadow-xs"
+                  : "text-[#4B2C20]/60 hover:text-[#4B2C20]"
+              )}
+              aria-label="English"
+            >
+              EN
+            </button>
+          </div>
+
           <button
             onClick={() => {
               setViewTrash(prev => !prev);
@@ -618,15 +673,15 @@ ESTADO: ${getEffectiveStatus(selectedSession)}`;
                 ? "bg-[#4B2C20] text-[#FAF7F2] border-[#4B2C20]"
                 : "bg-white text-[#4B2C20]/80 border-[#E8DFD8] hover:bg-[#F5EFE6] hover:text-[#4B2C20]"
             )}
-            title="Ver papelera de reciclaje"
+            title={t.trashTooltip}
           >
             <Trash2 className="w-3.5 h-3.5 text-[#D4A373]" />
-            <span>Papelera ({trashSessions.length})</span>
+            <span>{t.trashBtn(trashSessions.length)}</span>
           </button>
 
           <button
             onClick={fetchServerSessions}
-            title="Refrescar lista"
+            title={t.refreshTooltip}
             className="p-2 text-[#4B2C20]/70 hover:text-[#4B2C20] hover:bg-[#F5EFE6] rounded-xl transition-colors"
           >
             <RefreshCw className={clsx("w-4 h-4", isLoading && "animate-spin text-[#D4A373]")} />
@@ -635,7 +690,7 @@ ESTADO: ${getEffectiveStatus(selectedSession)}`;
             onClick={onLogout}
             className="flex items-center gap-1.5 px-3.5 py-2 text-xs font-bold uppercase tracking-wider text-red-700 hover:bg-red-50 rounded-xl transition-colors border border-red-200"
           >
-            <LogOut className="w-3.5 h-3.5" /> Cerrar Sesión
+            <LogOut className="w-3.5 h-3.5" /> {t.logout}
           </button>
         </div>
       </header>
@@ -650,14 +705,14 @@ ESTADO: ${getEffectiveStatus(selectedSession)}`;
                     onClick={() => setViewTrash(false)}
                     className="flex items-center gap-1 text-xs font-bold text-[#D4A373] uppercase tracking-wider mb-2 hover:underline"
                   >
-                    <ArrowLeft className="w-3.5 h-3.5" /> Volver al Panel de Candidatos
+                    <ArrowLeft className="w-3.5 h-3.5" /> {t.backToDashboard}
                   </button>
                   <h1 className="text-3xl md:text-4xl font-serif text-[#4B2C20] mb-2 flex items-center gap-3">
                     <Trash2 className="w-7 h-7 text-[#D4A373]" />
-                    Papelera de Reciclaje ({trashSessions.length})
+                    {t.trashHeading(trashSessions.length)}
                   </h1>
                   <p className="text-[#4B2C20]/70 font-light text-sm">
-                    Entrevistas eliminadas temporalmente. Puedes restaurarlas a la lista principal o eliminarlas definitivamente.
+                    {t.trashDescription}
                   </p>
                 </div>
               </div>
@@ -665,15 +720,15 @@ ESTADO: ${getEffectiveStatus(selectedSession)}`;
               {/* Notice */}
               <div className="bg-amber-50 border border-amber-200 rounded-2xl p-4 mb-6 flex items-center gap-3 text-xs text-amber-900">
                 <AlertCircle className="w-4 h-4 text-amber-700 shrink-0" />
-                <span>Los elementos se eliminan definitivamente después de 30 días.</span>
+                <span>{t.trash30DaysNotice}</span>
               </div>
 
               {trashSessions.length === 0 ? (
                 <div className="text-center py-16 px-4 bg-white border border-[#E8DFD8] rounded-2xl">
                   <Trash2 className="w-12 h-12 text-[#D4A373]/50 mx-auto mb-4" />
-                  <h3 className="text-lg font-serif font-medium text-[#4B2C20] mb-2">La papelera está vacía</h3>
+                  <h3 className="text-lg font-serif font-medium text-[#4B2C20] mb-2">{t.emptyTrashTitle}</h3>
                   <p className="text-sm font-light text-[#4B2C20]/60 max-w-sm mx-auto">
-                    Las entrevistas eliminadas aparecerán aquí y podrán restaurarse durante 30 días.
+                    {t.emptyTrashDesc}
                   </p>
                 </div>
               ) : (
@@ -688,19 +743,19 @@ ESTADO: ${getEffectiveStatus(selectedSession)}`;
                         <div className="space-y-2 flex-1">
                           <div className="flex flex-wrap items-center gap-2">
                             <span className="text-[11px] font-bold text-neutral-400 uppercase tracking-wider">
-                              Eliminada: {formatInterviewDate(session.deletedAt || session.date)}
+                              {t.deletedOn} {formatInterviewDate(session.deletedAt || session.date, lang)}
                             </span>
                             <span className="text-[10px] uppercase tracking-widest font-bold px-2.5 py-0.5 rounded-full bg-amber-100 text-amber-900 border border-amber-300 flex items-center gap-1">
-                              <Clock className="w-3 h-3 text-amber-700" /> {daysLeft} {daysLeft === 1 ? 'día restante' : 'días restantes'} antes de la purga
+                              <Clock className="w-3 h-3 text-amber-700" /> {t.daysRemaining(daysLeft)}
                             </span>
                           </div>
 
                           <h3 className="text-xl font-serif text-[#4B2C20]">
-                            {session.candidateInfo?.name || 'Aplicante Sin Nombre'}
+                            {session.candidateInfo?.name || t.unnamedApplicant}
                           </h3>
 
                           <div className="flex flex-wrap items-center gap-y-1 gap-x-4 text-xs text-[#4B2C20]/75 font-light">
-                            <span className="font-medium text-[#4B2C20]">Posición: <strong>{session.position || 'No especificada'}</strong></span>
+                            <span className="font-medium text-[#4B2C20]">{t.positionLabel} <strong>{session.position || t.notSpecified}</strong></span>
                             {session.candidateInfo?.email && (
                               <span>{session.candidateInfo.email}</span>
                             )}
@@ -716,7 +771,7 @@ ESTADO: ${getEffectiveStatus(selectedSession)}`;
                             className="flex-1 md:flex-none flex items-center justify-center gap-1.5 px-4 py-2.5 bg-[#4B2C20] text-[#FAF7F2] rounded-xl font-bold text-xs uppercase tracking-widest hover:bg-[#3E2723] transition-colors shadow-xs"
                           >
                             <RotateCcw className="w-3.5 h-3.5 text-[#D4A373]" />
-                            Restaurar
+                            {t.restoreBtn}
                           </button>
 
                           <button
@@ -724,7 +779,7 @@ ESTADO: ${getEffectiveStatus(selectedSession)}`;
                             className="flex-1 md:flex-none flex items-center justify-center gap-1.5 px-4 py-2.5 bg-red-50 border border-red-200 text-red-700 rounded-xl font-bold text-xs uppercase tracking-widest hover:bg-red-100 transition-colors"
                           >
                             <Trash2 className="w-3.5 h-3.5" />
-                            Eliminar Definitivamente
+                            {t.permanentDeleteBtn}
                           </button>
                         </div>
                       </div>
@@ -738,13 +793,13 @@ ESTADO: ${getEffectiveStatus(selectedSession)}`;
               <div className="flex flex-col md:flex-row md:items-end justify-between gap-4 mb-6">
                 <div>
                   <span className="text-[10px] uppercase tracking-widest text-[#D4A373] font-bold block mb-1">
-                    Panel Exclusivo de Recursos Humanos (RRHH)
+                    {t.panelExclusiveSubtitle}
                   </span>
                   <h1 className="text-3xl md:text-4xl font-serif text-[#4B2C20] mb-2">
-                    Candidate Applications & Tracking
+                    {t.dashboardHeroTitle}
                   </h1>
                   <p className="text-[#4B2C20]/70 font-light text-sm">
-                    Registro centralizado de todas las aplicaciones: completadas, en curso e incompletas (solo registro de datos).
+                    {t.dashboardSubtitle}
                   </p>
                 </div>
               </div>
@@ -761,7 +816,7 @@ ESTADO: ${getEffectiveStatus(selectedSession)}`;
                   )}
                 >
                   <span className="text-[10px] uppercase tracking-widest font-bold text-[#4B2C20]/60 block mb-1">
-                    Total Activas
+                    {t.kpiTotalActive}
                   </span>
                   <span className="text-2xl font-serif font-bold text-[#4B2C20] block">
                     {activeSessions.length}
@@ -779,7 +834,7 @@ ESTADO: ${getEffectiveStatus(selectedSession)}`;
                 >
                   <div className="flex items-center justify-between mb-1">
                     <span className="text-[10px] uppercase tracking-widest font-bold text-green-800">
-                      Completadas
+                      {t.kpiCompleted}
                     </span>
                     <CheckCircle2 className="w-3.5 h-3.5 text-green-600" />
                   </div>
@@ -799,7 +854,7 @@ ESTADO: ${getEffectiveStatus(selectedSession)}`;
                 >
                   <div className="flex items-center justify-between mb-1">
                     <span className="text-[10px] uppercase tracking-widest font-bold text-blue-800">
-                      En Curso
+                      {t.kpiInProgress}
                     </span>
                     <Clock className="w-3.5 h-3.5 text-blue-600" />
                   </div>
@@ -819,7 +874,7 @@ ESTADO: ${getEffectiveStatus(selectedSession)}`;
                 >
                   <div className="flex items-center justify-between mb-1">
                     <span className="text-[10px] uppercase tracking-widest font-bold text-amber-900">
-                      Incompletas / Lead
+                      {t.kpiIncomplete}
                     </span>
                     <AlertCircle className="w-3.5 h-3.5 text-amber-700" />
                   </div>
@@ -837,7 +892,7 @@ ESTADO: ${getEffectiveStatus(selectedSession)}`;
                     type="text"
                     value={searchQuery}
                     onChange={(e) => setSearchQuery(e.target.value)}
-                    placeholder="Buscar por nombre, correo, teléfono o puesto..."
+                    placeholder={t.searchPlaceholder}
                     className="w-full pl-10 pr-4 py-2 bg-[#FAF7F2]/60 border border-[#E8DFD8] rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-[#D4A373] text-[#4B2C20]"
                   />
                 </div>
@@ -848,7 +903,7 @@ ESTADO: ${getEffectiveStatus(selectedSession)}`;
                     onChange={(e) => setPositionFilter(e.target.value)}
                     className="px-3 py-2 bg-[#FAF7F2]/60 border border-[#E8DFD8] rounded-xl text-xs font-medium text-[#4B2C20] focus:outline-none focus:ring-2 focus:ring-[#D4A373]"
                   >
-                    <option value="All">Todos los Puestos</option>
+                    <option value="All">{t.allPositions}</option>
                     <option value="Barista">Barista</option>
                     <option value="Shift Leader">Shift Leader</option>
                     <option value="Store Manager">Store Manager</option>
@@ -859,10 +914,10 @@ ESTADO: ${getEffectiveStatus(selectedSession)}`;
                     onChange={(e) => setStatusFilter(e.target.value)}
                     className="px-3 py-2 bg-[#FAF7F2]/60 border border-[#E8DFD8] rounded-xl text-xs font-medium text-[#4B2C20] focus:outline-none focus:ring-2 focus:ring-[#D4A373]"
                   >
-                    <option value="All">Todos los Estados</option>
-                    <option value="Completed">Completadas</option>
-                    <option value="In Progress">En Progreso</option>
-                    <option value="Incomplete">Incompletas / Lead</option>
+                    <option value="All">{t.allStatuses}</option>
+                    <option value="Completed">{t.statusCompleted}</option>
+                    <option value="In Progress">{t.statusInProgress}</option>
+                    <option value="Incomplete">{t.statusIncomplete}</option>
                   </select>
                 </div>
               </div>
@@ -871,17 +926,17 @@ ESTADO: ${getEffectiveStatus(selectedSession)}`;
               {activeSessions.length === 0 ? (
                 <div className="text-center py-16 px-4 bg-white border border-[#E8DFD8] rounded-2xl">
                   <FileText className="w-12 h-12 text-[#D4A373]/50 mx-auto mb-4" />
-                  <h3 className="text-lg font-serif font-medium text-[#4B2C20] mb-2">No hay candidatos registrados</h3>
+                  <h3 className="text-lg font-serif font-medium text-[#4B2C20] mb-2">{t.emptyActiveTitle}</h3>
                   <p className="text-sm font-light text-[#4B2C20]/60 max-w-sm mx-auto">
-                    Aún no se han recibido aplicaciones ni inicios de entrevistas. Los candidatos aparecerán aquí automáticamente en tiempo real.
+                    {t.emptyActiveDesc}
                   </p>
                 </div>
               ) : filteredSessions.length === 0 ? (
                 <div className="text-center py-12 px-4 bg-white border border-[#E8DFD8] rounded-2xl">
                   <Search className="w-10 h-10 text-[#D4A373]/50 mx-auto mb-3" />
-                  <h3 className="text-base font-serif font-medium text-[#4B2C20] mb-1">Sin resultados</h3>
+                  <h3 className="text-base font-serif font-medium text-[#4B2C20] mb-1">{t.emptySearchTitle}</h3>
                   <p className="text-xs font-light text-[#4B2C20]/60">
-                    No se encontraron candidatos que coincidan con los filtros o término de búsqueda.
+                    {t.emptySearchDesc}
                   </p>
                 </div>
               ) : (
@@ -897,7 +952,7 @@ ESTADO: ${getEffectiveStatus(selectedSession)}`;
                         <div className="space-y-1.5 flex-1">
                           <div className="flex flex-wrap items-center gap-2">
                             <span className="text-[11px] font-bold text-neutral-400 uppercase tracking-wider">
-                              {formatInterviewDate(session.date)}
+                              {formatInterviewDate(session.date, lang)}
                             </span>
                             
                             <span className={clsx(
@@ -908,7 +963,7 @@ ESTADO: ${getEffectiveStatus(selectedSession)}`;
                                 ? "bg-blue-100 text-blue-800 border border-blue-200"
                                 : "bg-amber-100 text-amber-900 border border-amber-300"
                             )}>
-                              {effectiveStatus === 'Completed' ? 'Completada' : effectiveStatus === 'In Progress' ? 'En Progreso' : 'Incompleta / Datos Registrados'}
+                              {effectiveStatus === 'Completed' ? t.badgeCompleted : effectiveStatus === 'In Progress' ? t.badgeInProgress : t.badgeIncomplete}
                             </span>
 
                             {authSummary && (
@@ -922,44 +977,44 @@ ESTADO: ${getEffectiveStatus(selectedSession)}`;
                                       ? "bg-amber-50 text-amber-800 border-amber-300"
                                       : "bg-red-50 text-red-800 border-red-300"
                                   )}
-                                  title={`Confianza promedio: ${authSummary.avgConfidence}% · Min: ${authSummary.minConfidence}% · WPM: ${authSummary.avgWpm}`}
+                                  title={`${t.authMetricAvgConfidence}: ${authSummary.avgConfidence}% · Min: ${authSummary.minConfidence}% · WPM: ${authSummary.avgWpm}`}
                                 >
                                   <ShieldCheck className="w-3 h-3" />
-                                  {authSummary.avgConfidence}% Confianza Humana
-                                  {authSummary.requiresReview && " · ⚠"}
+                                  {t.chipHumanConfidence(authSummary.avgConfidence)}
+                                  {authSummary.requiresReview && ` ${t.chipWarned}`}
                                 </span>
                               ) : (
                                 <span className="text-[10px] uppercase tracking-widest font-bold px-2 py-0.5 rounded-full bg-neutral-100 text-neutral-600 border border-neutral-200 flex items-center gap-1">
-                                  <ShieldCheck className="w-3 h-3" /> Sin telemetría
+                                  <ShieldCheck className="w-3 h-3" /> {t.chipNoTelemetry}
                                 </span>
                               )
                             )}
 
                             {session.emailSent && (
                               <span className="text-[10px] uppercase tracking-widest font-bold px-2 py-0.5 rounded-full bg-stone-100 text-stone-700 border border-stone-200 flex items-center gap-1">
-                                <Mail className="w-2.5 h-2.5" /> Email RRHH Enviado
+                                <Mail className="w-2.5 h-2.5" /> {t.chipEmailSent}
                               </span>
                             )}
 
                             {session.secondInterviewGuide && (
                               <span className="text-[10px] uppercase tracking-widest font-bold px-2 py-0.5 rounded-full bg-purple-50 text-purple-900 border border-purple-200 flex items-center gap-1">
-                                <Sparkles className="w-2.5 h-2.5 text-purple-600" /> 2ª Guía Lista
+                                <Sparkles className="w-2.5 h-2.5 text-purple-600" /> {t.chipGuideReady}
                               </span>
                             )}
 
                             {session.followUpSentAt && (
                               <span className="text-[10px] uppercase tracking-widest font-bold px-2 py-0.5 rounded-full bg-amber-50 text-amber-800 border border-amber-200 flex items-center gap-1">
-                                <Mail className="w-2.5 h-2.5 text-amber-600" /> Recordatorio Enviado
+                                <Mail className="w-2.5 h-2.5 text-amber-600" /> {t.chipReminderSent}
                               </span>
                             )}
                           </div>
 
                           <h3 className="text-xl font-serif text-[#4B2C20]">
-                            {session.candidateInfo?.name || 'Aplicante Sin Nombre'}
+                            {session.candidateInfo?.name || t.unnamedApplicant}
                           </h3>
 
                           <div className="flex flex-wrap items-center gap-y-1 gap-x-4 text-xs text-[#4B2C20]/75 font-light">
-                            <span className="font-medium text-[#4B2C20]">Posición: <strong>{session.position || 'No especificada'}</strong></span>
+                            <span className="font-medium text-[#4B2C20]">{t.positionLabel} <strong>{session.position || t.notSpecified}</strong></span>
                             {session.candidateInfo?.email && (
                               <span className="flex items-center gap-1">
                                 <Mail className="w-3 h-3 text-[#D4A373]" />
@@ -973,7 +1028,7 @@ ESTADO: ${getEffectiveStatus(selectedSession)}`;
                               </span>
                             )}
                             <span className="text-neutral-400">
-                              {session.messages ? Math.max(0, session.messages.filter(m => m.role === 'user').length) : 0} respuestas dadas
+                              {t.answersGiven(session.messages ? Math.max(0, session.messages.filter(m => m.role === 'user').length) : 0)}
                             </span>
                           </div>
                         </div>
@@ -983,10 +1038,10 @@ ESTADO: ${getEffectiveStatus(selectedSession)}`;
                             <button
                               onClick={() => onResume(session.id)}
                               className="flex-1 md:flex-none flex items-center justify-center gap-1.5 px-3 py-2 bg-[#F5EFE6] text-[#4B2C20] hover:bg-[#E8DFD8] rounded-xl text-xs font-bold uppercase tracking-wider transition-colors border border-[#D4A373]/40"
-                              title="Continuar simulación de entrevista"
+                              title={t.continueBtn}
                             >
                               <PlayCircle className="w-3.5 h-3.5 text-[#D4A373]" />
-                              Continuar
+                              {t.continueBtn}
                             </button>
                           )}
 
@@ -995,10 +1050,10 @@ ESTADO: ${getEffectiveStatus(selectedSession)}`;
                               onClick={() => handleSendFollowUp(session)}
                               disabled={isSendingFollowUp}
                               className="flex-1 md:flex-none flex items-center justify-center gap-1.5 px-3 py-2 bg-amber-50 text-amber-900 hover:bg-amber-100 rounded-xl text-xs font-bold uppercase tracking-wider transition-colors border border-amber-300 disabled:opacity-50"
-                              title="Enviar recordatorio automático por correo electrónico"
+                              title={t.sendReminderBtn}
                             >
                               <Mail className="w-3.5 h-3.5 text-amber-700" />
-                              {session.followUpSentAt ? 'Reenviar Recordatorio' : 'Enviar Recordatorio'}
+                              {session.followUpSentAt ? t.resendReminderBtn : t.sendReminderBtn}
                             </button>
                           )}
 
@@ -1012,24 +1067,24 @@ ESTADO: ${getEffectiveStatus(selectedSession)}`;
                             {effectiveStatus === 'Completed' ? (
                               <>
                                 <Award className="w-4 h-4 text-[#D4A373]" />
-                                Ver Evaluación
+                                {t.viewEvaluationBtn}
                               </>
                             ) : effectiveStatus === 'Incomplete' ? (
                               <>
                                 <FileText className="w-4 h-4 text-[#D4A373]" />
-                                Ver Ficha / Datos
+                                {t.viewContactBtn}
                               </>
                             ) : (
                               <>
                                 <MessageSquare className="w-4 h-4 text-[#D4A373]" />
-                                Ver Transcripción
+                                {t.viewTranscriptBtn}
                               </>
                             )}
                           </button>
 
                           <button
                             onClick={() => handleDelete(session.id, session.candidateInfo?.name || '')}
-                            title="Mover a la papelera"
+                            title={t.moveToTrashBtn}
                             className="p-2.5 text-neutral-400 hover:text-red-600 hover:bg-red-50 rounded-xl transition-colors border border-transparent hover:border-red-200"
                           >
                             <Trash2 className="w-4 h-4" />
@@ -1049,10 +1104,10 @@ ESTADO: ${getEffectiveStatus(selectedSession)}`;
                     onClick={() => setSelectedSessionId(null)}
                     className="flex items-center gap-1 text-xs font-bold text-[#D4A373] uppercase tracking-wider mb-2 hover:underline"
                   >
-                    <ArrowLeft className="w-3.5 h-3.5" /> Volver a Lista de Candidatos
+                    <ArrowLeft className="w-3.5 h-3.5" /> {t.backToList}
                   </button>
                   <h1 className="text-3xl md:text-4xl font-serif leading-tight text-[#4B2C20]">
-                    {selectedSession.candidateInfo?.name || 'Aplicante'} &mdash; {selectedSession.position}
+                    {selectedSession.candidateInfo?.name || t.applicantFallback} &mdash; {selectedSession.position || t.notSpecified}
                   </h1>
                   
                   <div className="flex flex-wrap items-center gap-2 mt-2">
@@ -1064,7 +1119,7 @@ ESTADO: ${getEffectiveStatus(selectedSession)}`;
                         ? "bg-blue-100 text-blue-800 border border-blue-200"
                         : "bg-amber-100 text-amber-900 border border-amber-300"
                     )}>
-                      Estado: {getEffectiveStatus(selectedSession) === 'Completed' ? 'Completada' : getEffectiveStatus(selectedSession) === 'In Progress' ? 'En Progreso' : 'Incompleta / Solo Datos'}
+                      {t.statusLabel} {getEffectiveStatus(selectedSession) === 'Completed' ? t.badgeCompleted : getEffectiveStatus(selectedSession) === 'In Progress' ? t.badgeInProgress : t.badgeIncomplete}
                     </span>
                     {(() => {
                       const detailAuth = getSessionAuthenticitySummary(selectedSession);
@@ -1080,19 +1135,19 @@ ESTADO: ${getEffectiveStatus(selectedSession)}`;
                               : "bg-red-100 text-red-900 border-red-300"
                           )}>
                             <ShieldCheck className="w-3.5 h-3.5" />
-                            Confianza de Autoría: {detailAuth.avgConfidence}%
-                            {detailAuth.requiresReview ? " (Revisión Sugerida)" : " (Patrón Normal)"}
+                            {t.authorshipConfidence} {detailAuth.avgConfidence}%
+                            {detailAuth.requiresReview ? t.reviewSuggested : t.normalPattern}
                           </span>
                         );
                       }
                       return (
                         <span className="text-[10px] uppercase tracking-widest font-bold px-2.5 py-0.5 rounded-full bg-neutral-100 text-neutral-600 border border-neutral-200 flex items-center gap-1.5">
-                          <ShieldCheck className="w-3.5 h-3.5" /> Sin telemetría de tecleo
+                          <ShieldCheck className="w-3.5 h-3.5" /> {t.noTypingTelemetry}
                         </span>
                       );
                     })()}
                     <span className="text-xs text-[#4B2C20]/70 font-light">
-                      Registrado el {formatInterviewDate(selectedSession.date)}
+                      {t.registeredOn(formatInterviewDate(selectedSession.date, lang))}
                     </span>
                   </div>
                 </div>
@@ -1103,7 +1158,7 @@ ESTADO: ${getEffectiveStatus(selectedSession)}`;
                     className="flex items-center gap-1.5 px-3.5 py-2 bg-white border border-[#E8DFD8] text-[#4B2C20] rounded-xl text-xs font-bold uppercase tracking-wider hover:bg-[#F5EFE6] transition-colors shadow-xs"
                   >
                     {copiedContact ? <Check className="w-3.5 h-3.5 text-green-600" /> : <Copy className="w-3.5 h-3.5 text-[#D4A373]" />}
-                    {copiedContact ? 'Ficha Copiada' : 'Copiar Contacto'}
+                    {copiedContact ? t.contactCopiedBtn : t.copyContactBtn}
                   </button>
 
                   <button
@@ -1111,14 +1166,14 @@ ESTADO: ${getEffectiveStatus(selectedSession)}`;
                     className="flex items-center gap-1.5 px-3.5 py-2 bg-white border border-[#E8DFD8] text-[#4B2C20] rounded-xl text-xs font-bold uppercase tracking-wider hover:bg-[#F5EFE6] transition-colors shadow-xs"
                   >
                     {copied ? <Check className="w-3.5 h-3.5 text-green-600" /> : <MessageSquare className="w-3.5 h-3.5 text-[#D4A373]" />}
-                    {copied ? 'Copiado' : 'Copiar Transcripción'}
+                    {copied ? t.transcriptCopiedBtn : t.copyTranscriptBtn}
                   </button>
 
                   <button
                     onClick={() => handleDelete(selectedSession.id, selectedSession.candidateInfo?.name || '')}
                     className="flex items-center gap-1.5 px-3.5 py-2 bg-red-50 border border-red-200 text-red-700 rounded-xl text-xs font-bold uppercase tracking-wider hover:bg-red-100 transition-colors"
                   >
-                    <Trash2 className="w-3.5 h-3.5" /> Mover a Papelera
+                    <Trash2 className="w-3.5 h-3.5" /> {t.moveToTrashBtn}
                   </button>
                 </div>
               </div>
@@ -1129,13 +1184,13 @@ ESTADO: ${getEffectiveStatus(selectedSession)}`;
                   <div className="flex items-start gap-3">
                     <AlertCircle className="w-5 h-5 text-amber-700 shrink-0 mt-0.5" />
                     <div>
-                      <h4 className="text-sm font-bold text-amber-900">Aplicación Incompleta / Solo Datos Iniciales</h4>
+                      <h4 className="text-sm font-bold text-amber-900">{t.incompleteBannerTitle}</h4>
                       <p className="text-xs text-amber-800 font-light mt-0.5">
-                        El candidato llenó el formulario de registro pero no completó o abandonó la entrevista virtual. Tiene los datos de contacto listos para seguimiento telefónico o por correo.
+                        {t.incompleteBannerDesc}
                       </p>
                       {followUpSuccessEmail && (
                         <div className="mt-2 text-xs font-semibold text-green-700 flex items-center gap-1.5 bg-green-50 border border-green-200 px-2.5 py-1 rounded-lg">
-                          <Check className="w-3.5 h-3.5" /> Correo de seguimiento enviado a {followUpSuccessEmail}
+                          <Check className="w-3.5 h-3.5" /> {t.followUpSentSuccess(followUpSuccessEmail)}
                         </div>
                       )}
                       {followUpError && (
@@ -1149,7 +1204,7 @@ ESTADO: ${getEffectiveStatus(selectedSession)}`;
                   <div className="flex flex-col md:flex-row items-start md:items-center gap-2 shrink-0">
                     {selectedSession.followUpSentAt && (
                       <span className="text-[11px] text-amber-800/80 font-medium">
-                        Último recordatorio: {new Date(selectedSession.followUpSentAt).toLocaleDateString()}
+                        {t.lastReminder(formatInterviewDate(selectedSession.followUpSentAt, lang))}
                       </span>
                     )}
                     <button
@@ -1160,12 +1215,12 @@ ESTADO: ${getEffectiveStatus(selectedSession)}`;
                       {isSendingFollowUp ? (
                         <>
                           <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                          Enviando...
+                          {t.sendingReminderBtn}
                         </>
                       ) : (
                         <>
                           <Mail className="w-3.5 h-3.5" />
-                          {selectedSession.followUpSentAt ? 'Reenviar Correo' : 'Enviar Recordatorio'}
+                          {selectedSession.followUpSentAt ? t.resendReminderBtn : t.sendReminderBtn}
                         </>
                       )}
                     </button>
@@ -1185,7 +1240,7 @@ ESTADO: ${getEffectiveStatus(selectedSession)}`;
                   )}
                 >
                   <Award className="w-4 h-4 text-[#D4A373]" />
-                  Evaluación & Confianza {selectedSession.evaluation ? '✓' : '(Generar)'}
+                  {t.tabEvaluation} {selectedSession.evaluation ? '✓' : `(${t.tabGenerateSuffix})`}
                 </button>
 
                 <button
@@ -1198,7 +1253,7 @@ ESTADO: ${getEffectiveStatus(selectedSession)}`;
                   )}
                 >
                   <Sparkles className="w-4 h-4 text-[#D4A373]" />
-                  2ª Entrevista {selectedSession.secondInterviewGuide ? '✓' : '(Generar)'}
+                  {t.tabSecondInterview} {selectedSession.secondInterviewGuide ? '✓' : `(${t.tabGenerateSuffix})`}
                 </button>
 
                 <button
@@ -1211,7 +1266,7 @@ ESTADO: ${getEffectiveStatus(selectedSession)}`;
                   )}
                 >
                   <MessageSquare className="w-4 h-4 text-[#D4A373]" />
-                  Transcripción ({selectedSession.messages ? Math.max(0, selectedSession.messages.filter(m => m.role === 'user').length) : 0} respuestas)
+                  {t.tabTranscript} {t.tabAnswersCount(selectedSession.messages ? Math.max(0, selectedSession.messages.filter(m => m.role === 'user').length) : 0)}
                 </button>
 
                 <button
@@ -1224,7 +1279,7 @@ ESTADO: ${getEffectiveStatus(selectedSession)}`;
                   )}
                 >
                   <FileText className="w-4 h-4 text-[#D4A373]" />
-                  Ficha de Contacto
+                  {t.tabContact}
                 </button>
               </div>
 
@@ -1238,9 +1293,9 @@ ESTADO: ${getEffectiveStatus(selectedSession)}`;
                       return (
                         <div className="bg-white border border-[#E8DFD8] rounded-2xl p-6 shadow-xs text-center">
                           <ShieldCheck className="w-10 h-10 text-[#D4A373]/60 mx-auto mb-2" />
-                          <h4 className="text-sm font-bold text-[#4B2C20]">Sin respuestas registradas</h4>
+                          <h4 className="text-sm font-bold text-[#4B2C20]">{t.noAnswersTitle}</h4>
                           <p className="text-xs text-[#4B2C20]/60 mt-1">
-                            El candidato aún no ha enviado respuestas en esta entrevista.
+                            {t.noAnswersDesc}
                           </p>
                         </div>
                       );
@@ -1255,10 +1310,10 @@ ESTADO: ${getEffectiveStatus(selectedSession)}`;
                             </div>
                             <div>
                               <h4 className="text-sm uppercase tracking-wider font-bold text-[#4B2C20]">
-                                Evaluación de Confianza y Autenticidad
+                                {t.authEvaluationTitle}
                               </h4>
                               <p className="text-xs text-[#4B2C20]/60 font-light">
-                                Análisis de señales de escritura en tiempo real, ritmo y consistencia humana.
+                                {t.authEvaluationSubtitle}
                               </p>
                             </div>
                           </div>
@@ -1270,11 +1325,11 @@ ESTADO: ${getEffectiveStatus(selectedSession)}`;
                                 ? "bg-amber-50 text-amber-900 border-amber-300"
                                 : "bg-emerald-50 text-emerald-900 border-emerald-300"
                             )}>
-                              {authMetrics.requiresReview ? '⚠ Revisión sugerida' : '✓ Patrón de escritura normal'}
+                              {authMetrics.requiresReview ? t.authReviewSuggestedBadge : t.authNormalPatternBadge}
                             </span>
                           ) : (
                             <span className="text-xs uppercase tracking-widest font-bold px-3 py-1 rounded-full bg-stone-100 text-stone-700 border border-stone-300 w-fit">
-                              Sin telemetría de tecleo (Sesión guardada previa)
+                              {t.authNoTelemetryLegacy}
                             </span>
                           )}
                         </div>
@@ -1285,7 +1340,7 @@ ESTADO: ${getEffectiveStatus(selectedSession)}`;
                             <div className="bg-[#FAF7F2] p-4 rounded-xl border border-[#E8DFD8]">
                               <div className="flex items-center justify-between mb-2">
                                 <span className="text-xs font-bold uppercase tracking-wider text-[#4B2C20]">
-                                  Índice de Confianza Humana Promedio
+                                  {t.authAvgConfidenceLabel}
                                 </span>
                                 <span className={clsx(
                                   "text-xl font-bold font-serif",
@@ -1316,13 +1371,13 @@ ESTADO: ${getEffectiveStatus(selectedSession)}`;
                             {/* Metrics Grid */}
                             <div className="grid grid-cols-2 md:grid-cols-5 gap-3 text-xs">
                               <div className="bg-[#FAF7F2] p-3 rounded-xl border border-[#E8DFD8]">
-                                <span className="text-neutral-500 block text-[11px]">Confianza Promedio</span>
+                                <span className="text-neutral-500 block text-[11px]">{t.authMetricAvgConfidence}</span>
                                 <span className="text-base font-bold text-[#4B2C20]">
                                   {authMetrics.avgConfidence !== null ? `${authMetrics.avgConfidence}%` : 'N/A'}
                                 </span>
                               </div>
                               <div className="bg-[#FAF7F2] p-3 rounded-xl border border-[#E8DFD8]">
-                                <span className="text-neutral-500 block text-[11px]">Respuesta Mínima</span>
+                                <span className="text-neutral-500 block text-[11px]">{t.authMetricLowestAnswer}</span>
                                 <span className="text-base font-bold text-[#4B2C20]">
                                   {authMetrics.minConfidence !== null
                                     ? `#${authMetrics.minConfidenceIndex} (${authMetrics.minConfidence}%)`
@@ -1330,15 +1385,15 @@ ESTADO: ${getEffectiveStatus(selectedSession)}`;
                                 </span>
                               </div>
                               <div className="bg-[#FAF7F2] p-3 rounded-xl border border-[#E8DFD8]">
-                                <span className="text-neutral-500 block text-[11px]">Intentos de Pegado</span>
+                                <span className="text-neutral-500 block text-[11px]">{t.authMetricPasteAttempts}</span>
                                 <span className="text-base font-bold text-[#4B2C20]">{authMetrics.totalPasteAttempts}</span>
                               </div>
                               <div className="bg-[#FAF7F2] p-3 rounded-xl border border-[#E8DFD8]">
-                                <span className="text-neutral-500 block text-[11px]">Cambios de Pestaña</span>
+                                <span className="text-neutral-500 block text-[11px]">{t.authMetricTabSwitches}</span>
                                 <span className="text-base font-bold text-[#4B2C20]">{authMetrics.totalTabSwitches}</span>
                               </div>
                               <div className="bg-[#FAF7F2] p-3 rounded-xl border border-[#E8DFD8]">
-                                <span className="text-neutral-500 block text-[11px]">Velocidad Promedio</span>
+                                <span className="text-neutral-500 block text-[11px]">{t.authMetricAvgSpeed}</span>
                                 <span className="text-base font-bold text-[#4B2C20]">{authMetrics.avgWpm} WPM</span>
                               </div>
                             </div>
@@ -1347,7 +1402,7 @@ ESTADO: ${getEffectiveStatus(selectedSession)}`;
                             {authMetrics.confidenceScores.length > 0 && (
                               <div className="pt-2">
                                 <span className="text-[11px] font-bold uppercase tracking-wider text-[#4B2C20]/70 block mb-2">
-                                  Desglose por Respuesta ({authMetrics.confidenceScores.length} con métricas)
+                                  {t.authBreakdownTitle(authMetrics.confidenceScores.length)}
                                 </span>
                                 <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-2">
                                   {authMetrics.confidenceScores.map(item => (
@@ -1355,7 +1410,7 @@ ESTADO: ${getEffectiveStatus(selectedSession)}`;
                                       key={item.index}
                                       className="bg-[#FAF7F2] border border-[#E8DFD8] rounded-xl px-3 py-2 text-xs flex items-center justify-between"
                                     >
-                                      <span className="font-medium text-[#4B2C20]">Respuesta #{item.index}</span>
+                                      <span className="font-medium text-[#4B2C20]">{t.authAnswerNumber(item.index)}</span>
                                       <span
                                         className={clsx(
                                           "font-bold px-2 py-0.5 rounded-full border text-[11px]",
@@ -1367,7 +1422,7 @@ ESTADO: ${getEffectiveStatus(selectedSession)}`;
                                         )}
                                       >
                                         {item.score}%
-                                        {item.warned && ' · avisado'}
+                                        {item.warned && ` · ${t.chipWarned}`}
                                       </span>
                                     </div>
                                   ))}
@@ -1378,13 +1433,13 @@ ESTADO: ${getEffectiveStatus(selectedSession)}`;
                         ) : (
                           <div className="bg-[#FAF7F2] p-4 rounded-xl border border-[#E8DFD8] text-xs text-[#4B2C20]/80">
                             <p>
-                              Esta entrevista fue registrada antes de habilitar la telemetría de tecleo. A continuación puede visualizar o generar la evaluación completa de RRHH.
+                              {t.authLegacySessionNotice}
                             </p>
                           </div>
                         )}
 
                         <p className="text-[11px] text-[#4B2C20]/60 font-light">
-                          Nota: La puntuación de confianza se calcula a partir de patrones de tecleo, cambios de foco, velocidad WPM y pegados. Funciona como señal complementaria para RRHH.
+                          {t.authFooterDisclaimer}
                         </p>
                       </div>
                     );
@@ -1395,9 +1450,9 @@ ESTADO: ${getEffectiveStatus(selectedSession)}`;
                     <div className="bg-white border border-[#E8DFD8] rounded-2xl p-6 md:p-8 shadow-xs space-y-6">
                       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-4 border-b border-[#E8DFD8]">
                         <div>
-                          <h3 className="text-xl font-serif text-[#4B2C20]">Informe de Evaluación de RRHH</h3>
+                          <h3 className="text-xl font-serif text-[#4B2C20]">{t.evalReportTitle}</h3>
                           <span className="text-xs text-[#4B2C20]/60 font-light">
-                            Evaluación generada con base en las respuestas del candidato y las señales de autenticidad.
+                            {t.evalReportSubtitle}
                           </span>
                         </div>
                         <button
@@ -1407,11 +1462,11 @@ ESTADO: ${getEffectiveStatus(selectedSession)}`;
                         >
                           {isEvaluating ? (
                             <>
-                              <Loader2 className="w-3.5 h-3.5 animate-spin text-[#D4A373]" /> Re-evaluando...
+                              <Loader2 className="w-3.5 h-3.5 animate-spin text-[#D4A373]" /> {t.evalReevaluatingBtn}
                             </>
                           ) : (
                             <>
-                              <RefreshCw className="w-3.5 h-3.5 text-[#D4A373]" /> Regenerar con IA
+                              <RefreshCw className="w-3.5 h-3.5 text-[#D4A373]" /> {t.evalReevaluateBtn}
                             </>
                           )}
                         </button>
@@ -1425,9 +1480,9 @@ ESTADO: ${getEffectiveStatus(selectedSession)}`;
                     <div className="bg-white border border-[#E8DFD8] rounded-2xl p-8 shadow-xs text-center space-y-4">
                       <Award className="w-12 h-12 text-[#D4A373] mx-auto" />
                       <div>
-                        <h3 className="text-lg font-serif font-bold text-[#4B2C20]">Evaluación de RRHH Pendiente</h3>
+                        <h3 className="text-lg font-serif font-bold text-[#4B2C20]">{t.evalPendingTitle}</h3>
                         <p className="text-xs text-[#4B2C20]/70 font-light max-w-md mx-auto mt-1">
-                          Esta entrevista cuenta con respuestas registradas pero aún no se ha generado el reporte formal de evaluación y análisis de autenticidad.
+                          {t.evalPendingDesc}
                         </p>
                       </div>
                       <div>
@@ -1438,11 +1493,11 @@ ESTADO: ${getEffectiveStatus(selectedSession)}`;
                         >
                           {isEvaluating ? (
                             <>
-                              <Loader2 className="w-4 h-4 animate-spin text-[#D4A373]" /> Generando Evaluación con IA...
+                              <Loader2 className="w-4 h-4 animate-spin text-[#D4A373]" /> {t.evalGeneratingFullBtn}
                             </>
                           ) : (
                             <>
-                              <Award className="w-4 h-4 text-[#D4A373]" /> Generar Evaluación Completa con IA
+                              <Award className="w-4 h-4 text-[#D4A373]" /> {t.evalGenerateFullBtn}
                             </>
                           )}
                         </button>
@@ -1491,28 +1546,28 @@ ESTADO: ${getEffectiveStatus(selectedSession)}`;
                       });
 
                       let calculatedVerdict: { title: string; desc: string; type: 'hire' | 'third' | 'decline' } = {
-                        title: 'Pendiente de puntuación',
-                        desc: 'Puntúe las preguntas durante la entrevista para obtener la recomendación automatizada.',
+                        title: t.verdictPendingTitle,
+                        desc: t.verdictPendingDesc,
                         type: 'third',
                       };
 
                       if (scoredCount > 0) {
                         if (mustPassFailed) {
                           calculatedVerdict = {
-                            title: 'Recomendación: Declinar Candidato',
-                            desc: 'Uno o más bloques eliminatorios (Must-Pass) tienen una calificación deficiente por debajo del mínimo.',
+                            title: t.verdictDeclineTitle,
+                            desc: t.verdictDeclineDesc,
                             type: 'decline',
                           };
                         } else if (mustPassExcellent && overallAvg !== null && overallAvg >= 3.8 && scoredCount >= Math.ceil(totalQuestions * 0.7)) {
                           calculatedVerdict = {
-                            title: 'Recomendación: Contratar Candidato',
-                            desc: 'Cumple y supera los criterios clave en los bloques eliminatorios y operativos con alta solvencia.',
+                            title: t.verdictHireTitle,
+                            desc: t.verdictHireDesc,
                             type: 'hire',
                           };
                         } else {
                           calculatedVerdict = {
-                            title: 'Recomendación: Tercera Conversación / Análisis Adicional',
-                            desc: 'Puntuación intermedia o dudas específicas en ciertas áreas. Requiere alineación con directiva.',
+                            title: t.verdictThirdTitle,
+                            desc: t.verdictThirdDesc,
                             type: 'third',
                           };
                         }
@@ -1525,19 +1580,19 @@ ESTADO: ${getEffectiveStatus(selectedSession)}`;
                             <div>
                               <div className="flex items-center gap-2 mb-1">
                                 <span className="text-[10px] uppercase tracking-widest font-bold px-2.5 py-0.5 rounded-full bg-purple-100 text-purple-900 border border-purple-300 flex items-center gap-1">
-                                  <Sparkles className="w-3 h-3 text-purple-700" /> Guía Presencial Personalizada
+                                  <Sparkles className="w-3 h-3 text-purple-700" /> {t.guideCustomBadge}
                                 </span>
                                 {guide.generatedAt && (
                                   <span className="text-xs text-[#4B2C20]/60 font-light">
-                                    Generada el {new Date(guide.generatedAt).toLocaleDateString()} a las {new Date(guide.generatedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                                    {t.guideGeneratedAt(formatInterviewDate(guide.generatedAt, lang), '')}
                                   </span>
                                 )}
                               </div>
                               <h3 className="text-2xl font-serif text-[#4B2C20]">
-                                Cuestionario & Pautas para 2ª Entrevista
+                                {t.guideHeaderTitle}
                               </h3>
                               <p className="text-xs text-[#4B2C20]/70 font-light mt-0.5">
-                                Formulado a partir del análisis del historial de respuestas, consistencia y telemetría de {selectedSession.candidateInfo?.name || 'este candidato'}.
+                                {t.guideHeaderDesc(selectedSession.candidateInfo?.name || t.applicantFallback)}
                               </p>
                             </div>
 
@@ -1547,22 +1602,22 @@ ESTADO: ${getEffectiveStatus(selectedSession)}`;
                                 className="flex items-center gap-1.5 px-3.5 py-2 bg-white border border-[#E8DFD8] text-[#4B2C20] rounded-xl text-xs font-bold uppercase tracking-wider hover:bg-[#F5EFE6] transition-colors shadow-xs"
                               >
                                 {copiedGuide ? <Check className="w-3.5 h-3.5 text-green-600" /> : <Copy className="w-3.5 h-3.5 text-[#D4A373]" />}
-                                {copiedGuide ? 'Guía Copiada' : 'Copiar Texto'}
+                                {copiedGuide ? t.guideCopiedBtn : t.guideCopyBtn}
                               </button>
 
                               <button
                                 onClick={() => handleGenerateGuide(true)}
                                 disabled={isGeneratingGuide}
                                 className="flex items-center gap-1.5 px-3.5 py-2 bg-[#FAF7F2] border border-[#E8DFD8] text-[#4B2C20] rounded-xl text-xs font-bold uppercase tracking-wider hover:bg-[#F5EFE6] transition-colors disabled:opacity-50 shadow-xs"
-                                title="Generar una nueva versión del cuestionario con IA"
+                                title={t.guideRegenerateTooltip}
                               >
                                 {isGeneratingGuide ? (
                                   <>
-                                    <Loader2 className="w-3.5 h-3.5 animate-spin text-[#D4A373]" /> Regenerando...
+                                    <Loader2 className="w-3.5 h-3.5 animate-spin text-[#D4A373]" /> {t.guideRegeneratingBtn}
                                   </>
                                 ) : (
                                   <>
-                                    <RefreshCw className="w-3.5 h-3.5 text-[#D4A373]" /> Regenerar con IA
+                                    <RefreshCw className="w-3.5 h-3.5 text-[#D4A373]" /> {t.guideRegenerateBtn}
                                   </>
                                 )}
                               </button>
@@ -1592,17 +1647,17 @@ ESTADO: ${getEffectiveStatus(selectedSession)}`;
                                 </span>
                                 {saveStatus === 'saving' && (
                                   <span className="text-[11px] text-[#4B2C20]/70 flex items-center gap-1 font-medium animate-pulse">
-                                    <Loader2 className="w-3 h-3 animate-spin text-[#D4A373]" /> Guardando puntuación...
+                                    <Loader2 className="w-3 h-3 animate-spin text-[#D4A373]" /> {t.savingScore}
                                   </span>
                                 )}
                                 {saveStatus === 'saved' && (
                                   <span className="text-[11px] text-green-700 flex items-center gap-1 font-semibold">
-                                    <Check className="w-3 h-3 text-green-600" /> Cambios guardados
+                                    <Check className="w-3 h-3 text-green-600" /> {t.savedScore}
                                   </span>
                                 )}
                                 {saveStatus === 'error' && (
                                   <span className="text-[11px] text-red-700 flex items-center gap-1 font-semibold">
-                                    <AlertCircle className="w-3 h-3 text-red-600" /> Error al sincronizar
+                                    <AlertCircle className="w-3 h-3 text-red-600" /> {t.errorSavingScore}
                                   </span>
                                 )}
                               </div>
@@ -1614,7 +1669,7 @@ ESTADO: ${getEffectiveStatus(selectedSession)}`;
                             <div className="flex items-center gap-6 shrink-0 bg-white/80 border border-[#E8DFD8] rounded-xl px-5 py-3 shadow-xs">
                               <div>
                                 <span className="text-[10px] uppercase tracking-wider text-neutral-500 font-bold block">
-                                  Progreso Puntuado
+                                  {t.scoredProgressLabel}
                                 </span>
                                 <span className="text-lg font-serif font-bold text-[#4B2C20]">
                                   {scoredCount} / {totalQuestions}
@@ -1622,7 +1677,7 @@ ESTADO: ${getEffectiveStatus(selectedSession)}`;
                               </div>
                               <div className="border-l border-[#E8DFD8] pl-6">
                                 <span className="text-[10px] uppercase tracking-wider text-neutral-500 font-bold block">
-                                  Promedio General
+                                  {t.overallAverageLabel}
                                 </span>
                                 <span className="text-lg font-serif font-bold text-[#4B2C20]">
                                   {overallAvg !== null ? `${overallAvg.toFixed(1)} / 5.0` : '—'}
@@ -1638,7 +1693,7 @@ ESTADO: ${getEffectiveStatus(selectedSession)}`;
                                 <div className="flex items-center gap-2 pb-2 border-b border-[#E8DFD8]">
                                   <AlertCircle className="w-4 h-4 text-[#D4A373]" />
                                   <h4 className="text-xs uppercase tracking-widest font-bold text-[#4B2C20]">
-                                    Puntos Clave a Verificar en Presencial
+                                    {t.focusPointsTitle}
                                   </h4>
                                 </div>
                                 <ul className="space-y-2 text-xs text-[#4B2C20]/80 font-light leading-relaxed list-disc list-inside">
@@ -1656,7 +1711,7 @@ ESTADO: ${getEffectiveStatus(selectedSession)}`;
                                 <div className="flex items-center gap-2 pb-2 border-b border-[#E8DFD8]">
                                   <HelpCircle className="w-4 h-4 text-[#D4A373]" />
                                   <h4 className="text-xs uppercase tracking-widest font-bold text-[#4B2C20]">
-                                    Consejos de Indagación para el Entrevistador
+                                    {t.interviewerTipsTitle}
                                   </h4>
                                 </div>
                                 <ul className="space-y-2 text-xs text-[#4B2C20]/80 font-light leading-relaxed list-disc list-inside">
@@ -1674,12 +1729,12 @@ ESTADO: ${getEffectiveStatus(selectedSession)}`;
                           {guide.decision && (
                             <div className="bg-white border border-[#E8DFD8] rounded-2xl p-6 shadow-xs space-y-3">
                               <h4 className="text-xs uppercase tracking-widest font-bold text-[#4B2C20] pb-2 border-b border-[#E8DFD8]">
-                                Marco de Decisión y Criterios Predefinidos
+                                {t.decisionFrameworkTitle}
                               </h4>
                               <div className="grid grid-cols-1 md:grid-cols-3 gap-4 text-xs">
                                 <div className="p-3.5 rounded-xl bg-green-50 border border-green-200">
                                   <span className="font-bold text-green-900 block mb-1 uppercase tracking-wider text-[10px]">
-                                    ✓ Contratar
+                                    {t.decisionHireLabel}
                                   </span>
                                   <p className="text-green-800 font-light leading-relaxed">
                                     {guide.decision.hire}
@@ -1688,7 +1743,7 @@ ESTADO: ${getEffectiveStatus(selectedSession)}`;
 
                                 <div className="p-3.5 rounded-xl bg-amber-50 border border-amber-200">
                                   <span className="font-bold text-amber-900 block mb-1 uppercase tracking-wider text-[10px]">
-                                    ? Tercera Conversación
+                                    {t.decisionThirdLabel}
                                   </span>
                                   <p className="text-amber-800 font-light leading-relaxed">
                                     {guide.decision.thirdConversation}
@@ -1697,7 +1752,7 @@ ESTADO: ${getEffectiveStatus(selectedSession)}`;
 
                                 <div className="p-3.5 rounded-xl bg-red-50 border border-red-200">
                                   <span className="font-bold text-red-900 block mb-1 uppercase tracking-wider text-[10px]">
-                                    ✕ Declinar
+                                    {t.decisionDeclineLabel}
                                   </span>
                                   <p className="text-red-800 font-light leading-relaxed">
                                     {guide.decision.decline}
@@ -1724,7 +1779,7 @@ ESTADO: ${getEffectiveStatus(selectedSession)}`;
                                     <div>
                                       <div className="flex flex-wrap items-center gap-2 mb-1">
                                         <span className="text-[10px] uppercase font-bold tracking-widest px-2.5 py-0.5 rounded-full bg-[#FAF7F2] text-[#4B2C20] border border-[#E8DFD8]">
-                                          Bloque {bIdx + 1} &middot; {block.minutes} min
+                                          {t.blockLabel(bIdx + 1, block.minutes)}
                                         </span>
                                         <span className={clsx(
                                           "text-[10px] uppercase font-bold tracking-widest px-2.5 py-0.5 rounded-full border",
@@ -1732,20 +1787,20 @@ ESTADO: ${getEffectiveStatus(selectedSession)}`;
                                             ? "bg-red-50 text-red-900 border-red-300"
                                             : "bg-neutral-50 text-neutral-700 border-neutral-200"
                                         )}>
-                                          {block.mustPass ? "Eliminatorio (Must-Pass)" : "Formativo / Competencias"}
+                                          {block.mustPass ? t.blockMustPass : t.blockFormative}
                                         </span>
                                       </div>
                                       <h4 className="text-xl font-serif text-[#4B2C20]">
                                         {block.title}
                                       </h4>
                                       <p className="text-xs text-[#4B2C20]/75 font-light mt-1">
-                                        <strong>Objetivo:</strong> {block.goal}
+                                        <strong>{t.blockGoalLabel}</strong> {block.goal}
                                       </p>
                                     </div>
 
                                     {bAvg !== null && (
                                       <div className="shrink-0 flex items-center gap-2 bg-[#FAF7F2] border border-[#E8DFD8] px-3.5 py-2 rounded-xl text-xs">
-                                        <span className="text-neutral-500 font-medium text-[11px] uppercase tracking-wider">Promedio Bloque:</span>
+                                        <span className="text-neutral-500 font-medium text-[11px] uppercase tracking-wider">{t.blockAverageLabel}</span>
                                         <span className={clsx(
                                           "font-bold font-serif text-sm",
                                           bAvg >= 3.8 ? "text-green-700" : bAvg >= 2.5 ? "text-amber-700" : "text-red-700"
@@ -1772,11 +1827,11 @@ ESTADO: ${getEffectiveStatus(selectedSession)}`;
                                             <div className="space-y-1">
                                               <div className="flex items-center gap-2">
                                                 <span className="text-[10px] font-bold uppercase tracking-wider text-[#D4A373]">
-                                                  Pregunta {bIdx + 1}.{qIdx + 1}
+                                                  {t.questionLabel(bIdx + 1, qIdx + 1)}
                                                 </span>
                                                 {question.language === 'en' && (
                                                   <span className="text-[9px] uppercase tracking-widest font-bold px-2 py-0.5 rounded-full bg-blue-100 text-blue-900 border border-blue-300">
-                                                    EN &mdash; English Verification
+                                                    {t.questionEnglishBadge}
                                                   </span>
                                                 )}
                                               </div>
@@ -1784,7 +1839,7 @@ ESTADO: ${getEffectiveStatus(selectedSession)}`;
                                                 "{question.text}"
                                               </h5>
                                               <p className="text-xs text-[#4B2C20]/70 font-light">
-                                                <strong>Propósito:</strong> {question.purpose}
+                                                <strong>{t.questionPurposeLabel}</strong> {question.purpose}
                                               </p>
                                             </div>
                                           </div>
@@ -1793,7 +1848,7 @@ ESTADO: ${getEffectiveStatus(selectedSession)}`;
                                           <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-xs">
                                             <div className="p-3.5 bg-emerald-50/70 border border-emerald-200 rounded-xl space-y-1.5">
                                               <span className="font-bold text-emerald-900 text-[10px] uppercase tracking-wider flex items-center gap-1">
-                                                <CheckCircle2 className="w-3 h-3 text-emerald-700" /> Qué escuchar (Buena Señal)
+                                                <CheckCircle2 className="w-3 h-3 text-emerald-700" /> {t.questionListenForTitle}
                                               </span>
                                               <ul className="space-y-1 text-emerald-950 font-light list-disc list-inside">
                                                 {(question.listenFor || []).map((lf, i) => (
@@ -1804,7 +1859,7 @@ ESTADO: ${getEffectiveStatus(selectedSession)}`;
 
                                             <div className="p-3.5 bg-red-50/70 border border-red-200 rounded-xl space-y-1.5">
                                               <span className="font-bold text-red-900 text-[10px] uppercase tracking-wider flex items-center gap-1">
-                                                <AlertCircle className="w-3 h-3 text-red-700" /> Alertas (Red Flags)
+                                                <AlertCircle className="w-3 h-3 text-red-700" /> {t.questionRedFlagsTitle}
                                               </span>
                                               <ul className="space-y-1 text-red-950 font-light list-disc list-inside">
                                                 {(question.redFlags || []).map((rf, i) => (
@@ -1818,7 +1873,7 @@ ESTADO: ${getEffectiveStatus(selectedSession)}`;
                                           <div className="pt-2 border-t border-[#E8DFD8]/80 space-y-3">
                                             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
                                               <span className="text-[11px] font-bold uppercase tracking-wider text-[#4B2C20]">
-                                                Puntuación en Vivo (1 a 5):
+                                                {t.liveRatingLabel}
                                               </span>
                                               <div className="flex items-center gap-1.5">
                                                 {[1, 2, 3, 4, 5].map((val) => {
@@ -1838,7 +1893,7 @@ ESTADO: ${getEffectiveStatus(selectedSession)}`;
                                                             : "bg-red-600 text-white border-red-700 shadow-sm"
                                                           : "bg-white text-[#4B2C20] border-[#E8DFD8] hover:bg-[#FAF7F2]"
                                                       )}
-                                                      title={`Puntuar ${val} de 5`}
+                                                      title={t.liveRatingTooltip(val)}
                                                     >
                                                       {val}
                                                     </button>
@@ -1852,7 +1907,7 @@ ESTADO: ${getEffectiveStatus(selectedSession)}`;
                                                 value={currentNote}
                                                 maxLength={2000}
                                                 onChange={(e) => handleNoteChange(question.id, e.target.value)}
-                                                placeholder="Anotaciones en vivo sobre la respuesta del candidato..."
+                                                placeholder={t.notesPlaceholder}
                                                 className="w-full text-xs font-light p-3 rounded-xl border border-[#E8DFD8] bg-white text-[#4B2C20] focus:ring-1 focus:ring-[#4B2C20] focus:border-[#4B2C20] outline-hidden resize-y min-h-[60px]"
                                               />
                                             </div>
@@ -1875,10 +1930,10 @@ ESTADO: ${getEffectiveStatus(selectedSession)}`;
                       </div>
                       <div>
                         <h3 className="text-xl font-serif font-bold text-[#4B2C20]">
-                          Guía de 2ª Entrevista Presencial
+                          {t.guideEmptyTitle}
                         </h3>
                         <p className="text-xs text-[#4B2C20]/70 font-light max-w-lg mx-auto mt-2 leading-relaxed">
-                          La IA analizará las respuestas previas del candidato, sus métricas de consistencia y redactará un cuestionario a medida para la entrevista presencial con pautas de observación, verificación en inglés, casos de estrés y rúbrica de puntuación en vivo.
+                          {t.guideEmptyDesc}
                         </p>
                       </div>
 
@@ -1897,11 +1952,11 @@ ESTADO: ${getEffectiveStatus(selectedSession)}`;
                         >
                           {isGeneratingGuide ? (
                             <>
-                              <Loader2 className="w-4 h-4 animate-spin text-[#D4A373]" /> Generando Guía con IA...
+                              <Loader2 className="w-4 h-4 animate-spin text-[#D4A373]" /> {t.guideGeneratingBtn}
                             </>
                           ) : (
                             <>
-                              <Sparkles className="w-4 h-4 text-[#D4A373]" /> Generar Guía de 2ª Entrevista con IA
+                              <Sparkles className="w-4 h-4 text-[#D4A373]" /> {t.guideGenerateBtn}
                             </>
                           )}
                         </button>
@@ -1915,31 +1970,31 @@ ESTADO: ${getEffectiveStatus(selectedSession)}`;
               {activeTab === 'contact' && (
                 <div className="bg-white border border-[#E8DFD8] rounded-2xl p-6 md:p-8 shadow-xs">
                   <h3 className="text-xl font-serif text-[#4B2C20] mb-4 pb-2 border-b border-[#E8DFD8]">
-                    Información Registrada del Candidato
+                    {t.contactInfoHeading}
                   </h3>
 
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                     <div>
                       <span className="text-xs uppercase tracking-widest font-bold text-neutral-400 block mb-1">
-                        Nombre Completo
+                        {t.contactFullName}
                       </span>
                       <p className="text-base font-medium text-[#4B2C20]">
-                        {selectedSession.candidateInfo?.name || 'No especificado'}
+                        {selectedSession.candidateInfo?.name || t.notSpecified}
                       </p>
                     </div>
 
                     <div>
                       <span className="text-xs uppercase tracking-widest font-bold text-neutral-400 block mb-1">
-                        Puesto de Interés
+                        {t.contactPosition}
                       </span>
                       <p className="text-base font-medium text-[#4B2C20]">
-                        {selectedSession.position || 'No especificado'}
+                        {selectedSession.position || t.notSpecified}
                       </p>
                     </div>
 
                     <div>
                       <span className="text-xs uppercase tracking-widest font-bold text-neutral-400 block mb-1">
-                        Teléfono
+                        {t.contactPhone}
                       </span>
                       <p className="text-base font-medium text-[#4B2C20]">
                         {selectedSession.candidateInfo?.phone ? (
@@ -1947,13 +2002,13 @@ ESTADO: ${getEffectiveStatus(selectedSession)}`;
                             <Phone className="w-4 h-4 text-[#D4A373]" />
                             {selectedSession.candidateInfo.phone}
                           </a>
-                        ) : 'No especificado'}
+                        ) : t.notSpecified}
                       </p>
                     </div>
 
                     <div>
                       <span className="text-xs uppercase tracking-widest font-bold text-neutral-400 block mb-1">
-                        Correo Electrónico
+                        {t.contactEmail}
                       </span>
                       <p className="text-base font-medium text-[#4B2C20]">
                         {selectedSession.candidateInfo?.email ? (
@@ -1961,23 +2016,23 @@ ESTADO: ${getEffectiveStatus(selectedSession)}`;
                             <Mail className="w-4 h-4 text-[#D4A373]" />
                             {selectedSession.candidateInfo.email}
                           </a>
-                        ) : 'No especificado'}
+                        ) : t.notSpecified}
                       </p>
                     </div>
                   </div>
                 </div>
               )}
 
-              {/* Tab 3: Transcript View */}
+              {/* Tab 4: Transcript View */}
               {activeTab === 'transcript' && (
                 <div className="space-y-4">
                   {/* Action Bar inside transcript if incomplete to evaluate manually */}
                   {!selectedSession.evaluation && (
                     <div className="bg-white border border-[#E8DFD8] rounded-2xl p-4 flex items-center justify-between shadow-xs">
                       <div>
-                        <h4 className="text-sm font-bold text-[#4B2C20]">¿Deseas evaluar las respuestas existentes?</h4>
+                        <h4 className="text-sm font-bold text-[#4B2C20]">{t.evaluateExistingPromptTitle}</h4>
                         <p className="text-xs text-[#4B2C20]/70 font-light">
-                          Puedes forzar la evaluación con las respuestas registradas hasta el momento.
+                          {t.evaluateExistingPromptDesc}
                         </p>
                       </div>
                       <button
@@ -1987,11 +2042,11 @@ ESTADO: ${getEffectiveStatus(selectedSession)}`;
                       >
                         {isEvaluating ? (
                           <>
-                            <Loader2 className="w-3.5 h-3.5 animate-spin" /> Generando...
+                            <Loader2 className="w-3.5 h-3.5 animate-spin" /> {t.evalGeneratingFullBtn}
                           </>
                         ) : (
                           <>
-                            <Award className="w-3.5 h-3.5 text-[#D4A373]" /> Evaluar Respuestas
+                            <Award className="w-3.5 h-3.5 text-[#D4A373]" /> {t.evaluateExistingActionBtn}
                           </>
                         )}
                       </button>
@@ -2001,9 +2056,9 @@ ESTADO: ${getEffectiveStatus(selectedSession)}`;
                   {selectedSession.messages.filter((_, i) => i > 0).length === 0 ? (
                     <div className="text-center py-12 px-4 bg-white border border-[#E8DFD8] rounded-2xl">
                       <MessageSquare className="w-10 h-10 text-[#D4A373]/50 mx-auto mb-3" />
-                      <h3 className="text-base font-serif font-medium text-[#4B2C20] mb-1">Sin mensajes registrados</h3>
+                      <h3 className="text-base font-serif font-medium text-[#4B2C20] mb-1">{t.emptyTranscriptTitle}</h3>
                       <p className="text-xs font-light text-[#4B2C20]/60">
-                        El candidato se registró pero no inició la conversación virtual con el asistente.
+                        {t.emptyTranscriptDesc}
                       </p>
                     </div>
                   ) : (
@@ -2024,7 +2079,7 @@ ESTADO: ${getEffectiveStatus(selectedSession)}`;
                               "text-[10px] uppercase font-bold tracking-widest",
                               isAI ? "text-[#D4A373]" : "text-[#D4A373]"
                             )}>
-                              {isAI ? 'Ellianos Virtual Interviewer' : (selectedSession.candidateInfo?.name || 'Applicant')}
+                              {isAI ? t.virtualInterviewerRole : (selectedSession.candidateInfo?.name || t.applicantFallback)}
                             </span>
                           </div>
                           <div className="whitespace-pre-wrap font-sans font-light leading-relaxed">
@@ -2050,17 +2105,17 @@ ESTADO: ${getEffectiveStatus(selectedSession)}`;
                                         : "bg-red-950/70 text-red-300 border-red-500/50"
                                     )}
                                   >
-                                    Humana {conf}%
+                                    {t.chipHumanConfidence(conf)}
                                     {msg.metrics.lowConfidenceWarned && (
-                                      <span className="opacity-90">· avisado</span>
+                                      <span className="opacity-90">· {t.chipWarned}</span>
                                     )}
                                   </span>
                                 )}
                                 <span>WPM: {msg.metrics.wpm}</span>
                                 <span>·</span>
-                                <span>Pegado: {msg.metrics.pasteAttempts || 0}</span>
+                                <span>{t.chipPasted(msg.metrics.pasteAttempts || 0)}</span>
                                 <span>·</span>
-                                <span>Pestañas: {msg.metrics.tabSwitches || 0}</span>
+                                <span>{t.chipTabs(msg.metrics.tabSwitches || 0)}</span>
                                 {msg.metrics.maxInsertChunk > 40 && (
                                   <>
                                     <span>·</span>

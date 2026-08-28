@@ -5,7 +5,8 @@ import { createServer as createViteServer } from "vite";
 import { GoogleGenAI } from "@google/genai";
 import dotenv from "dotenv";
 import nodemailer from "nodemailer";
-import { Firestore } from "@google-cloud/firestore";
+import { initializeApp } from "firebase/app";
+import { getFirestore, collection, getDocs, doc, setDoc, deleteDoc, getCountFromServer, query, limit } from "firebase/firestore";
 import { humanConfidence } from "./src/authenticity";
 import { SecondInterviewGuide, SecondInterviewScores } from "./src/types";
 
@@ -97,17 +98,13 @@ try {
 }
 
 // Initialize Firestore for durable Cloud persistence across all environments
-let firestoreClient: Firestore | null = null;
+let firestoreClient: any = null;
 try {
-  const options: any = {};
-  if (firebaseConfig?.projectId) {
-    options.projectId = firebaseConfig.projectId;
+  if (firebaseConfig) {
+    const firebaseApp = initializeApp(firebaseConfig);
+    firestoreClient = getFirestore(firebaseApp, firebaseConfig.firestoreDatabaseId || "(default)");
+    console.log(`[Storage] Initialized Cloud Firestore persistence (Project: ${firebaseConfig.projectId || 'default'}, DB: ${firebaseConfig.firestoreDatabaseId || '(default)'})`);
   }
-  if (firebaseConfig?.firestoreDatabaseId) {
-    options.databaseId = firebaseConfig.firestoreDatabaseId;
-  }
-  firestoreClient = new Firestore(options);
-  console.log(`[Storage] Initialized Cloud Firestore persistence (Project: ${firebaseConfig?.projectId || 'default'}, DB: ${firebaseConfig?.firestoreDatabaseId || '(default)'})`);
 } catch (fsErr) {
   console.warn("[Storage] Could not initialize Firestore client, fallback to local storage:", fsErr);
   firestoreClient = null;
@@ -137,13 +134,13 @@ function saveLocalSessions(sessions: any[]) {
 async function syncLocalToFirestoreIfEmpty() {
   if (!firestoreClient) return;
   try {
-    const snapshot = await firestoreClient.collection("interviews").limit(1).get();
+    const snapshot = await getDocs(query(collection(firestoreClient, "interviews"), limit(1)));
     if (snapshot.empty) {
       const local = getLocalSessions();
       if (local.length > 0) {
         console.log(`[Storage] Seeding ${local.length} existing local interviews to Cloud Firestore...`);
         for (const item of local) {
-          await firestoreClient.collection("interviews").doc(item.id).set(item, { merge: true });
+          await setDoc(doc(firestoreClient, "interviews", item.id), item, { merge: true });
         }
         console.log("[Storage] Cloud Firestore seeded successfully.");
       }
@@ -157,10 +154,10 @@ syncLocalToFirestoreIfEmpty();
 async function getStoredSessions(): Promise<any[]> {
   if (firestoreClient) {
     try {
-      const snapshot = await firestoreClient.collection("interviews").get();
+      const snapshot = await getDocs(collection(firestoreClient, "interviews"));
       const sessions: any[] = [];
-      snapshot.forEach((doc) => {
-        sessions.push(doc.data());
+      snapshot.forEach((docSnap) => {
+        sessions.push(docSnap.data());
       });
       return sessions.sort((a, b) => {
         const tA = a.date ? new Date(a.date).getTime() : 0;
@@ -254,7 +251,7 @@ async function upsertSession(session: any): Promise<void> {
   // Write to Cloud Firestore
   if (firestoreClient) {
     try {
-      await firestoreClient.collection("interviews").doc(safeSession.id).set(safeSession, { merge: true });
+      await setDoc(doc(firestoreClient, "interviews", safeSession.id), safeSession, { merge: true });
     } catch (fsErr) {
       console.warn("[Storage] Firestore write error:", fsErr);
     }
@@ -268,8 +265,8 @@ async function deleteStoredSession(id: string): Promise<number> {
 
   if (firestoreClient) {
     try {
-      await firestoreClient.collection("interviews").doc(id).delete();
-      const snapshot = await firestoreClient.collection("interviews").count().get();
+      await deleteDoc(doc(firestoreClient, "interviews", id));
+      const snapshot = await getCountFromServer(collection(firestoreClient, "interviews"));
       return snapshot.data().count;
     } catch (fsErr) {
       console.warn("[Storage] Firestore delete error:", fsErr);
@@ -485,7 +482,7 @@ function formatGuideAsPlainText(guide: SecondInterviewGuide): string {
   return out;
 }
 
-async function generateSecondInterviewGuide(session: any): Promise<SecondInterviewGuide> {
+async function generateSecondInterviewGuide(session: any, lang: string = 'es'): Promise<SecondInterviewGuide> {
   const { position, candidateInfo, messages, evaluation } = session;
   const candidateName = candidateInfo?.name || "Candidato";
   const userResponses = (messages || []).filter((m: any) => m.role === "user");
@@ -586,7 +583,7 @@ Genera un objeto JSON que cumpla EXACTAMENTE con el siguiente esquema:
 }
 
 REGLAS DE CONTENIDO:
-1. IDIOMA: La guía es para el entrevistador de RRHH de Ellianos, redactada en español. Las preguntas deben estar en español (language: "es"), EXCEPTO un bloque dedicado a la verificación de inglés funcional (preguntas formuladas en inglés, language: "en"), el cual es OBLIGATORIO si el candidato respondió en español (${isSpanishSpeaker ? "SÍ - es obligatorio incluir bloque de inglés" : "opcional/breve si ya demostró inglés fluido"}).
+1. IDIOMA: La guía es para el entrevistador de RRHH de Ellianos, redactada en ${lang === 'en' ? 'inglés' : 'español'}. Las preguntas deben estar en ${lang === 'en' ? 'inglés' : 'español'} (language: "${lang === 'en' ? 'en' : 'es'}"), EXCEPTO un bloque dedicado a la verificación de inglés funcional (preguntas formuladas en inglés, language: "en"), el cual es OBLIGATORIO si el candidato respondió en español (${isSpanishSpeaker ? "SÍ - es obligatorio incluir bloque de inglés" : "opcional/breve si ya demostró inglés fluido"}).
 2. ESTRUCTURA: Entre 4 y 5 bloques temáticos, 2 a 4 preguntas por bloque, sumando entre 45 y 60 minutos en total.
    - Bloques sugeridos según el caso:
      * Experiencia Real Verificable (mustPass: true)
@@ -958,7 +955,7 @@ app.post("/api/admin/sessions/:id/second-interview-guide", secondInterviewGuideL
   if (!verifyAdminAccess(authHeader, res)) return;
 
   const { id } = req.params;
-  const { force } = req.body || {};
+  const { force, lang } = req.body || {};
 
   try {
     const sessions = await getStoredSessions();
@@ -971,7 +968,7 @@ app.post("/api/admin/sessions/:id/second-interview-guide", secondInterviewGuideL
       return res.json({ success: true, guide: session.secondInterviewGuide });
     }
 
-    const guide = await generateSecondInterviewGuide(session);
+    const guide = await generateSecondInterviewGuide(session, lang || 'es');
     
     const updatedSession = {
       ...session,
