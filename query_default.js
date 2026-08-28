@@ -1,12 +1,11 @@
 import { Firestore } from '@google-cloud/firestore';
-import fs from 'fs';
-const config = JSON.parse(fs.readFileSync('firebase-applet-config.json', 'utf8'));
-const db = new Firestore({
-  projectId: config.projectId,
-  databaseId: '(default)'
-});
+const db = new Firestore();
 async function run() {
-  const snapshot = await db.collection('interviews').get();
-  console.log('Interviews found:', snapshot.size);
+  try {
+    const snapshot = await db.collection('interviews').get();
+    console.log('Count:', snapshot.size);
+  } catch (e) {
+    console.error('Error:', e.message);
+  }
 }
-run().catch(console.error);
+run();

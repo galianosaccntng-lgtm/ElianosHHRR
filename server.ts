@@ -5,8 +5,7 @@ import { createServer as createViteServer } from "vite";
 import { GoogleGenAI } from "@google/genai";
 import dotenv from "dotenv";
 import nodemailer from "nodemailer";
-import { initializeApp } from "firebase/app";
-import { getFirestore, collection, getDocs, doc, setDoc, deleteDoc, getCountFromServer, query, limit } from "firebase/firestore";
+import { Firestore } from "@google-cloud/firestore";
 import { humanConfidence } from "./src/authenticity";
 import { SecondInterviewGuide, SecondInterviewScores } from "./src/types";
 
@@ -98,13 +97,17 @@ try {
 }
 
 // Initialize Firestore for durable Cloud persistence across all environments
-let firestoreClient: any = null;
+let firestoreClient: Firestore | null = null;
 try {
-  if (firebaseConfig) {
-    const firebaseApp = initializeApp(firebaseConfig);
-    firestoreClient = getFirestore(firebaseApp, firebaseConfig.firestoreDatabaseId || "(default)");
-    console.log(`[Storage] Initialized Cloud Firestore persistence (Project: ${firebaseConfig.projectId || 'default'}, DB: ${firebaseConfig.firestoreDatabaseId || '(default)'})`);
+  const options: any = {};
+  if (firebaseConfig?.projectId) {
+    options.projectId = firebaseConfig.projectId;
   }
+  if (firebaseConfig?.firestoreDatabaseId) {
+    options.databaseId = firebaseConfig.firestoreDatabaseId;
+  }
+  firestoreClient = new Firestore(options);
+  console.log(`[Storage] Initialized Cloud Firestore persistence (Project: ${firebaseConfig?.projectId || 'default'}, DB: ${firebaseConfig?.firestoreDatabaseId || '(default)'})`);
 } catch (fsErr) {
   console.warn("[Storage] Could not initialize Firestore client, fallback to local storage:", fsErr);
   firestoreClient = null;
@@ -134,13 +137,13 @@ function saveLocalSessions(sessions: any[]) {
 async function syncLocalToFirestoreIfEmpty() {
   if (!firestoreClient) return;
   try {
-    const snapshot = await getDocs(query(collection(firestoreClient, "interviews"), limit(1)));
+    const snapshot = await firestoreClient.collection("interviews").limit(1).get();
     if (snapshot.empty) {
       const local = getLocalSessions();
       if (local.length > 0) {
         console.log(`[Storage] Seeding ${local.length} existing local interviews to Cloud Firestore...`);
         for (const item of local) {
-          await setDoc(doc(firestoreClient, "interviews", item.id), item, { merge: true });
+          await firestoreClient.collection("interviews").doc(item.id).set(item, { merge: true });
         }
         console.log("[Storage] Cloud Firestore seeded successfully.");
       }
@@ -154,7 +157,7 @@ syncLocalToFirestoreIfEmpty();
 async function getStoredSessions(): Promise<any[]> {
   if (firestoreClient) {
     try {
-      const snapshot = await getDocs(collection(firestoreClient, "interviews"));
+      const snapshot = await firestoreClient.collection("interviews").get();
       const sessions: any[] = [];
       snapshot.forEach((docSnap) => {
         sessions.push(docSnap.data());
@@ -220,6 +223,11 @@ function sanitizeSessionMessages(messages: any[]): any[] {
 
 async function upsertSession(session: any): Promise<void> {
   if (!session || !session.id) return;
+  
+  if (session.candidateInfo && session.candidateInfo.email) {
+    session.candidateInfo.email = session.candidateInfo.email.toLowerCase().trim();
+  }
+
   const safeSession: any = {
     ...session,
     messages: sanitizeSessionMessages(session.messages),
@@ -251,29 +259,27 @@ async function upsertSession(session: any): Promise<void> {
   // Write to Cloud Firestore
   if (firestoreClient) {
     try {
-      await setDoc(doc(firestoreClient, "interviews", safeSession.id), safeSession, { merge: true });
+      await firestoreClient.collection("interviews").doc(safeSession.id).set(safeSession, { merge: true });
     } catch (fsErr) {
       console.warn("[Storage] Firestore write error:", fsErr);
     }
   }
 }
 
-async function deleteStoredSession(id: string): Promise<number> {
+async function deleteStoredSession(id: string): Promise<{ success: boolean }> {
   let sessions = getLocalSessions();
   sessions = sessions.filter((s) => s.id !== id);
   saveLocalSessions(sessions);
 
   if (firestoreClient) {
     try {
-      await deleteDoc(doc(firestoreClient, "interviews", id));
-      const snapshot = await getCountFromServer(collection(firestoreClient, "interviews"));
-      return snapshot.data().count;
+      await firestoreClient.collection("interviews").doc(id).delete();
     } catch (fsErr) {
       console.warn("[Storage] Firestore delete error:", fsErr);
     }
   }
 
-  return sessions.length;
+  return { success: true };
 }
 
 // Initialize Gemini API
@@ -737,7 +743,21 @@ app.post("/api/sessions/find-incomplete", findIncompleteLimiter, async (req, res
       return res.json({ found: false });
     }
 
-    const sessions = await getStoredSessions();
+    let sessions: any[] = [];
+    if (firestoreClient) {
+      try {
+        const snapshot = await firestoreClient.collection("interviews").where("candidateInfo.email", "==", normalizedEmail).get();
+        snapshot.forEach((doc: any) => {
+          sessions.push(doc.data());
+        });
+      } catch (fsErr) {
+        console.warn("[FindIncomplete] Firestore error, falling back to local:", fsErr);
+        sessions = getLocalSessions();
+      }
+    } else {
+      sessions = getLocalSessions();
+    }
+
     const matched = sessions.filter((s: any) => {
       if (!s || s.deletedAt) return false;
       if (s.status === "Completed") return false;
@@ -858,8 +878,8 @@ app.delete("/api/admin/sessions/:id/permanent", async (req, res) => {
 
   const { id } = req.params;
   try {
-    const remaining = await deleteStoredSession(id);
-    res.json({ success: true, remaining });
+    const result = await deleteStoredSession(id);
+    res.json(result);
   } catch (err: any) {
     console.error("[Admin] Error permanently deleting session:", err);
     res.status(500).json({ error: "Failed to permanently delete session" });
