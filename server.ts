@@ -6,6 +6,9 @@ import { GoogleGenAI } from "@google/genai";
 import dotenv from "dotenv";
 import nodemailer from "nodemailer";
 import { Firestore } from "@google-cloud/firestore";
+import { Storage } from "@google-cloud/storage";
+import multer from "multer";
+import crypto from "crypto";
 import { humanConfidence } from "./src/authenticity";
 import { SecondInterviewGuide, SecondInterviewScores } from "./src/types";
 
@@ -19,6 +22,24 @@ app.use(express.json({ limit: "1mb" }));
 
 const PORT = Number(process.env.PORT) || 3000;
 const ADMIN_PASSCODE = (process.env.ADMIN_PASSCODE || "ellianos2024").trim();
+
+// Setup Storage
+let storageClient: Storage | null = null;
+const ONBOARDING_BUCKET = process.env.ONBOARDING_BUCKET?.trim();
+try {
+  if (ONBOARDING_BUCKET) {
+    storageClient = new Storage();
+    console.log(`[Storage] Initialized Cloud Storage for Onboarding (Bucket: ${ONBOARDING_BUCKET})`);
+  }
+} catch (err) {
+  console.warn("[Storage] Could not initialize Cloud Storage client:", err);
+  storageClient = null;
+}
+
+const upload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 10 * 1024 * 1024 }, // 10MB
+});
 
 // In-memory rate limiting mechanism per IP + route
 interface RateLimitRecord {
@@ -707,11 +728,12 @@ app.post("/api/sessions/sync", sessionSyncLimiter, async (req, res) => {
       }
     }
 
-    // Strip deletedAt and interview guide/scores from candidate sync payload to prevent unauthorized modification
+    // Strip deletedAt, interview guide/scores, and onboarding from candidate sync payload to prevent unauthorized modification
     const {
       deletedAt: _ignoredDeletedAt,
       secondInterviewGuide: _ignoredGuide,
       secondInterviewScores: _ignoredScores,
+      onboarding: _ignoredOnboarding,
       ...cleanSession
     } = session;
 
@@ -1253,6 +1275,304 @@ ${(messages || []).map((m: any) => `[${(m.role || "USER").toUpperCase()}]: ${m.p
   } catch (error: any) {
     console.error("Error evaluating application:", error);
     res.status(500).json({ success: false, error: error.message || "An error occurred during evaluation." });
+  }
+});
+
+const REQUIRED_DOC_TYPES = ['photo_id', 'work_authorization', 'direct_deposit', 'emergency_contact'];
+
+app.post("/api/admin/sessions/:id/onboarding/invite", async (req, res) => {
+  const authHeader = req.headers["x-admin-passcode"] as string | undefined;
+  if (!verifyAdminAccess(authHeader, res)) return;
+
+  const { id } = req.params;
+  const sessions = await getStoredSessions();
+  const session = sessions.find((s) => s.id === id);
+  if (!session) return res.status(404).json({ error: "Session not found" });
+
+  const token = crypto.randomUUID() + crypto.randomBytes(32).toString('base64url');
+  const tokenExpiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString();
+
+  session.onboarding = {
+    status: 'invited',
+    token,
+    tokenExpiresAt,
+    invitedAt: new Date().toISOString(),
+    documents: session.onboarding?.documents || [],
+    requiredDocTypes: REQUIRED_DOC_TYPES
+  };
+
+  await upsertSession(session);
+
+  const appUrl = process.env.APP_URL ? process.env.APP_URL.trim() : "";
+  const onboardingLink = `${appUrl}/onboarding?token=${token}`;
+  
+  const transporter = getMailTransporter();
+  if (transporter) {
+    const candidateName = session.candidateInfo?.name || "there";
+    const userResponses = (session.messages || []).filter((m: any) => m.role === "user");
+    const allUserText = userResponses.map((m: any) => m.parts?.[0]?.text || "").join(" ").toLowerCase();
+    const isSpanishSpeaker = allUserText.includes("gracias") || allUserText.includes("hola");
+
+    const subject = isSpanishSpeaker 
+      ? `¡Felicidades y Bienvenido/a a Ellianos Coffee!` 
+      : `Congratulations and Welcome to Ellianos Coffee!`;
+      
+    const text = isSpanishSpeaker
+      ? `Hola ${candidateName},\n\n¡Felicidades por haber sido contratado/a para unirte a Ellianos Coffee!\n\nPor favor, completa tu proceso de incorporación (onboarding) y sube tus documentos requeridos de manera segura a través de este enlace:\n\n${onboardingLink}\n\nEste enlace caducará en 7 días.\n\nSaludos,\nEl equipo de Ellianos`
+      : `Hi ${candidateName},\n\nCongratulations on being hired to join Ellianos Coffee!\n\nPlease complete your onboarding and securely upload your required documents via this link:\n\n${onboardingLink}\n\nThis link will expire in 7 days.\n\nBest regards,\nThe Ellianos Team`;
+
+    try {
+      await transporter.sendMail({
+        from: process.env.EMAIL_USER,
+        to: session.candidateInfo.email,
+        subject,
+        text,
+      });
+    } catch (e) {
+      console.warn("Failed to send onboarding email", e);
+    }
+  }
+
+  res.json({ success: true, onboarding: session.onboarding });
+});
+
+app.post("/api/admin/sessions/:id/onboarding/renew", async (req, res) => {
+  const authHeader = req.headers["x-admin-passcode"] as string | undefined;
+  if (!verifyAdminAccess(authHeader, res)) return;
+
+  const { id } = req.params;
+  const sessions = await getStoredSessions();
+  const session = sessions.find((s) => s.id === id);
+  if (!session || !session.onboarding) return res.status(404).json({ error: "Session or onboarding not found" });
+
+  const token = crypto.randomUUID() + crypto.randomBytes(32).toString('base64url');
+  session.onboarding.token = token;
+  session.onboarding.tokenExpiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString();
+  session.onboarding.status = session.onboarding.status === 'completed' ? 'invited' : session.onboarding.status;
+
+  await upsertSession(session);
+  res.json({ success: true, onboarding: session.onboarding });
+});
+
+app.get("/api/admin/sessions/:id/onboarding/doc/:docType/url", async (req, res) => {
+  const authHeader = req.headers["x-admin-passcode"] as string | undefined;
+  if (!verifyAdminAccess(authHeader, res)) return;
+
+  if (!storageClient || !ONBOARDING_BUCKET) {
+    return res.status(503).json({ error: "El almacenamiento de documentos no está configurado" });
+  }
+
+  const { id, docType } = req.params;
+  const sessions = await getStoredSessions();
+  const session = sessions.find((s) => s.id === id);
+  const doc = session?.onboarding?.documents?.find((d: any) => d.docType === docType);
+  if (!doc) return res.status(404).json({ error: "Document not found" });
+
+  try {
+    const [url] = await storageClient.bucket(ONBOARDING_BUCKET).file(doc.storagePath).getSignedUrl({
+      version: 'v4',
+      action: 'read',
+      expires: Date.now() + 15 * 60 * 1000,
+    });
+    res.json({ url });
+  } catch (err) {
+    console.error("Signed URL error:", err);
+    res.status(500).json({ error: "Failed to generate signed URL" });
+  }
+});
+
+app.post("/api/admin/sessions/:id/onboarding/complete", async (req, res) => {
+  const authHeader = req.headers["x-admin-passcode"] as string | undefined;
+  if (!verifyAdminAccess(authHeader, res)) return;
+  const { id } = req.params;
+  const sessions = await getStoredSessions();
+  const session = sessions.find((s) => s.id === id);
+  if (session && session.onboarding) {
+    session.onboarding.status = 'completed';
+    session.onboarding.tokenExpiresAt = new Date().toISOString();
+    await upsertSession(session);
+    res.json({ success: true, onboarding: session.onboarding });
+  } else {
+    res.status(404).json({ error: "Not found" });
+  }
+});
+
+app.delete("/api/admin/sessions/:id/onboarding/doc/:docType", async (req, res) => {
+  const authHeader = req.headers["x-admin-passcode"] as string | undefined;
+  if (!verifyAdminAccess(authHeader, res)) return;
+  const { id, docType } = req.params;
+  const sessions = await getStoredSessions();
+  const session = sessions.find((s) => s.id === id);
+  if (!session || !session.onboarding) return res.status(404).json({ error: "Not found" });
+  
+  const docIdx = session.onboarding.documents.findIndex((d: any) => d.docType === docType);
+  if (docIdx === -1) return res.status(404).json({ error: "Document not found" });
+
+  const doc = session.onboarding.documents[docIdx];
+  
+  if (storageClient && ONBOARDING_BUCKET) {
+    try {
+      await storageClient.bucket(ONBOARDING_BUCKET).file(doc.storagePath).delete();
+    } catch (e) {
+      console.warn("Storage deletion error", e);
+    }
+  }
+
+  session.onboarding.documents.splice(docIdx, 1);
+  if (session.onboarding.documents.length < session.onboarding.requiredDocTypes.length) {
+    session.onboarding.status = session.onboarding.documents.length === 0 ? 'invited' : 'in_progress';
+  }
+  
+  await upsertSession(session);
+  res.json({ success: true, onboarding: session.onboarding });
+});
+
+app.delete("/api/admin/sessions/:id/onboarding/all", async (req, res) => {
+  const authHeader = req.headers["x-admin-passcode"] as string | undefined;
+  if (!verifyAdminAccess(authHeader, res)) return;
+  const { id } = req.params;
+  const sessions = await getStoredSessions();
+  const session = sessions.find((s) => s.id === id);
+  if (!session || !session.onboarding) return res.status(404).json({ error: "Not found" });
+
+  if (storageClient && ONBOARDING_BUCKET) {
+    for (const doc of session.onboarding.documents) {
+      try {
+        await storageClient.bucket(ONBOARDING_BUCKET).file(doc.storagePath).delete();
+      } catch (e) {
+         console.warn("Failed to delete doc", e);
+      }
+    }
+  }
+
+  session.onboarding.documents = [];
+  session.onboarding.status = 'invited';
+  await upsertSession(session);
+  res.json({ success: true, onboarding: session.onboarding });
+});
+
+
+// CANDIDATE ENDPOINTS
+async function getSessionByToken(token: string) {
+  let sessions: any[] = [];
+  if (firestoreClient) {
+    try {
+      const snapshot = await firestoreClient.collection("interviews").where("onboarding.token", "==", token).get();
+      snapshot.forEach((doc: any) => sessions.push(doc.data()));
+    } catch (e) {
+      console.warn("Firestore token lookup error", e);
+      sessions = getLocalSessions();
+    }
+  } else {
+    sessions = getLocalSessions();
+  }
+  return sessions.find(s => s.onboarding && s.onboarding.token === token);
+}
+
+app.get("/api/onboarding/session", async (req, res) => {
+  const { token } = req.query;
+  if (typeof token !== 'string' || !token) return res.status(400).json({ error: "Missing token" });
+
+  const session = await getSessionByToken(token);
+  if (!session || !session.onboarding) return res.status(404).json({ error: "Invalid token" });
+
+  const isExpired = new Date(session.onboarding.tokenExpiresAt).getTime() < Date.now();
+  if (isExpired) return res.status(403).json({ error: "Token expired" });
+  if (session.onboarding.status === 'completed') return res.status(403).json({ error: "Onboarding completed" });
+
+  const userResponses = (session.messages || []).filter((m: any) => m.role === "user");
+  const allUserText = userResponses.map((m: any) => m.parts?.[0]?.text || "").join(" ").toLowerCase();
+  const isSpanishSpeaker = allUserText.includes("gracias") || allUserText.includes("hola") || allUserText.includes("trabajo");
+
+  res.json({
+    candidateName: session.candidateInfo?.name || "",
+    language: isSpanishSpeaker ? "es" : "en",
+    requiredDocTypes: session.onboarding.requiredDocTypes,
+    uploaded: session.onboarding.documents.map((d: any) => ({
+      docType: d.docType,
+      fileName: d.fileName,
+      uploadedAt: d.uploadedAt
+    })),
+    status: session.onboarding.status
+  });
+});
+
+app.post("/api/onboarding/upload", upload.single("file"), async (req, res) => {
+  const { token, docType } = req.body;
+  const file = req.file;
+
+  if (!token) return res.status(400).json({ error: "Missing token" });
+  if (!file) return res.status(400).json({ error: "Missing file" });
+  if (!docType) return res.status(400).json({ error: "Missing docType" });
+
+  if (!storageClient || !ONBOARDING_BUCKET) {
+    return res.status(503).json({ error: "El almacenamiento de documentos no está configurado" });
+  }
+
+  const session = await getSessionByToken(token);
+  if (!session || !session.onboarding) return res.status(404).json({ error: "Invalid token" });
+
+  const isExpired = new Date(session.onboarding.tokenExpiresAt).getTime() < Date.now();
+  if (isExpired) return res.status(403).json({ error: "Token expired" });
+  if (session.onboarding.status === 'completed') return res.status(403).json({ error: "Onboarding completed" });
+
+  if (!session.onboarding.requiredDocTypes.includes(docType)) {
+    return res.status(400).json({ error: "Invalid docType" });
+  }
+
+  const allowedMime = ['image/jpeg', 'image/png', 'image/heic', 'application/pdf'];
+  if (!allowedMime.includes(file.mimetype)) {
+    return res.status(400).json({ error: "Formato no permitido" });
+  }
+
+  const filenameSanitizado = file.originalname.replace(/[^a-zA-Z0-9.\-_]/g, '_');
+  const storagePath = `onboarding/${session.id}/${docType}/${crypto.randomUUID()}-${filenameSanitizado}`;
+
+  try {
+    const bucketFile = storageClient.bucket(ONBOARDING_BUCKET).file(storagePath);
+    await bucketFile.save(file.buffer, {
+      contentType: file.mimetype,
+      resumable: false
+    });
+
+    const docIndex = session.onboarding.documents.findIndex((d: any) => d.docType === docType);
+    const newDoc = {
+      docType,
+      fileName: file.originalname,
+      storagePath,
+      sizeBytes: file.size,
+      contentType: file.mimetype,
+      uploadedAt: new Date().toISOString()
+    };
+
+    if (docIndex > -1) {
+      const oldDoc = session.onboarding.documents[docIndex];
+      try { await storageClient.bucket(ONBOARDING_BUCKET).file(oldDoc.storagePath).delete(); } catch(e) {}
+      session.onboarding.documents[docIndex] = newDoc;
+    } else {
+      session.onboarding.documents.push(newDoc);
+    }
+
+    if (session.onboarding.documents.length >= session.onboarding.requiredDocTypes.length) {
+      session.onboarding.status = 'submitted';
+    } else {
+      session.onboarding.status = 'in_progress';
+    }
+
+    await upsertSession(session);
+
+    res.json({
+      success: true,
+      status: session.onboarding.status,
+      uploaded: session.onboarding.documents.map((d: any) => ({
+        docType: d.docType,
+        fileName: d.fileName,
+        uploadedAt: d.uploadedAt
+      }))
+    });
+  } catch (err) {
+    console.error("Upload error", err);
+    res.status(500).json({ error: "Upload failed" });
   }
 });
 

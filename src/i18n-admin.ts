@@ -236,6 +236,23 @@ export const adminI18n = {
     evaluateExistingActionBtn: 'Evaluar Respuestas',
     virtualInterviewerRole: 'Ellianos Virtual Interviewer',
 
+    // Onboarding Tab
+    tabOnboarding: 'Contratación',
+    onboardingInitiateBtn: 'Iniciar Contratación y Enviar Correo',
+    onboardingInitiatingBtn: 'Iniciando...',
+    onboardingRenewBtn: 'Reenviar / Renovar Enlace',
+    onboardingCompleteBtn: 'Marcar Contratación Completa',
+    onboardingStatusInvited: 'Invitado',
+    onboardingStatusInProgress: 'En Progreso (Subiendo)',
+    onboardingStatusSubmitted: 'Docs Subidos',
+    onboardingStatusCompleted: 'Completado',
+    onboardingDocPending: 'Pendiente',
+    onboardingDocUploaded: 'Subido',
+    onboardingDeleteAllBtn: 'Eliminar todos los documentos',
+    onboardingConfirmDeleteAll: '¿Estás seguro de eliminar TODOS los documentos? Esta acción es irreversible.',
+    onboardingPIIWarning: '⚠️ Estos documentos contienen datos personales sensibles (identificación, SSN, banco). Elimínalos una vez procesada la contratación.',
+    onboardingStatusLabel: 'Estado del Proceso:',
+
     // Helper Formats
     recentDate: 'Fecha Reciente',
     localeCode: 'es-US',
@@ -468,6 +485,23 @@ export const adminI18n = {
     evaluateExistingPromptDesc: 'You can trigger an evaluation with the answers recorded so far.',
     evaluateExistingActionBtn: 'Evaluate Answers',
     virtualInterviewerRole: 'Ellianos Virtual Interviewer',
+
+    // Onboarding Tab
+    tabOnboarding: 'Hiring / Onboarding',
+    onboardingInitiateBtn: 'Initiate Onboarding & Send Email',
+    onboardingInitiatingBtn: 'Initiating...',
+    onboardingRenewBtn: 'Resend / Renew Link',
+    onboardingCompleteBtn: 'Mark Onboarding Complete',
+    onboardingStatusInvited: 'Invited',
+    onboardingStatusInProgress: 'In Progress (Uploading)',
+    onboardingStatusSubmitted: 'Docs Submitted',
+    onboardingStatusCompleted: 'Completed',
+    onboardingDocPending: 'Pending',
+    onboardingDocUploaded: 'Uploaded',
+    onboardingDeleteAllBtn: 'Delete all documents',
+    onboardingConfirmDeleteAll: 'Are you sure you want to delete ALL documents? This action is irreversible.',
+    onboardingPIIWarning: '⚠️ These documents contain sensitive personal data (ID, SSN, banking). Delete them once hiring is processed.',
+    onboardingStatusLabel: 'Process Status:',
 
     // Helper Formats
     recentDate: 'Recent Date',

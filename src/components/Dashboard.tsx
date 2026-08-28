@@ -169,7 +169,7 @@ export function Dashboard({ adminToken, onBack, onLogout, onResume, onDelete, on
   const [isLoading, setIsLoading] = useState(true);
   const [isEvaluating, setIsEvaluating] = useState(false);
   const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null);
-  const [activeTab, setActiveTab] = useState<'evaluation' | 'secondInterview' | 'transcript' | 'contact'>('transcript');
+  const [activeTab, setActiveTab] = useState<'evaluation' | 'secondInterview' | 'transcript' | 'contact' | 'onboarding'>('transcript');
   const [copied, setCopied] = useState(false);
   const [copiedContact, setCopiedContact] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
@@ -610,6 +610,52 @@ ${t.copyContactStatus} ${effectiveStatusLabel}`;
 
     return matchesSearch && matchesPosition && matchesStatus;
   });
+
+  const [isOnboardingActionLoading, setIsOnboardingActionLoading] = useState(false);
+
+  const handleOnboardingAction = async (actionUrl: string, method: string = 'POST') => {
+    if (!adminToken) return;
+    setIsOnboardingActionLoading(true);
+    try {
+      const res = await fetch(actionUrl, {
+        method,
+        headers: {
+          'x-admin-passcode': adminToken,
+        },
+      });
+      if (res.ok) {
+        await fetchServerSessions();
+      } else {
+        const err = await res.json();
+        alert(err.error || "An error occurred");
+      }
+    } catch (e) {
+      alert("Network error");
+    } finally {
+      setIsOnboardingActionLoading(false);
+    }
+  };
+
+  const handleOnboardingDownload = async (docType: string) => {
+    if (!adminToken || !selectedSessionId) return;
+    setIsOnboardingActionLoading(true);
+    try {
+      const res = await fetch(`/api/admin/sessions/${selectedSessionId}/onboarding/doc/${docType}/url`, {
+        headers: { 'x-admin-passcode': adminToken },
+      });
+      if (res.ok) {
+        const { url } = await res.json();
+        window.open(url, '_blank');
+      } else {
+        const err = await res.json();
+        alert(err.error || "Could not generate download link");
+      }
+    } catch (e) {
+      alert("Network error");
+    } finally {
+      setIsOnboardingActionLoading(false);
+    }
+  };
 
   return (
     <div className="min-h-screen bg-[#FAF7F2] text-[#4B2C20] font-sans flex flex-col">
@@ -1280,6 +1326,19 @@ ${t.copyContactStatus} ${effectiveStatusLabel}`;
                 >
                   <FileText className="w-4 h-4 text-[#D4A373]" />
                   {t.tabContact}
+                </button>
+
+                <button
+                  onClick={() => setActiveTab('onboarding')}
+                  className={clsx(
+                    "flex items-center gap-2 px-6 py-3 font-bold text-xs uppercase tracking-widest border-b-2 transition-colors whitespace-nowrap",
+                    activeTab === 'onboarding'
+                      ? "border-[#4B2C20] text-[#4B2C20]"
+                      : "border-transparent text-[#4B2C20]/60 hover:text-[#4B2C20]"
+                  )}
+                >
+                  <ShieldCheck className="w-4 h-4 text-[#D4A373]" />
+                  {t.tabOnboarding} {selectedSession.onboarding && selectedSession.onboarding.status !== 'not_started' ? '✓' : ''}
                 </button>
               </div>
 
@@ -2019,6 +2078,143 @@ ${t.copyContactStatus} ${effectiveStatusLabel}`;
                         ) : t.notSpecified}
                       </p>
                     </div>
+                  </div>
+                </div>
+              )}
+
+              {/* Tab 5: Onboarding View */}
+              {activeTab === 'onboarding' && (
+                <div className="space-y-6">
+                  <div className="bg-white border border-[#E8DFD8] rounded-2xl p-6 md:p-8 shadow-xs">
+                    <div className="flex items-center justify-between mb-6 pb-4 border-b border-[#E8DFD8]">
+                      <div>
+                        <h3 className="text-xl font-serif text-[#4B2C20] flex items-center gap-2">
+                          <ShieldCheck className="w-6 h-6 text-[#D4A373]" />
+                          {t.tabOnboarding}
+                        </h3>
+                        {selectedSession.onboarding && (
+                          <div className="mt-2 flex items-center gap-2">
+                            <span className="text-xs uppercase tracking-widest font-bold text-neutral-500">
+                              {t.onboardingStatusLabel}
+                            </span>
+                            <span className={clsx(
+                              "text-[10px] uppercase font-bold tracking-widest px-2 py-0.5 rounded-md",
+                              selectedSession.onboarding.status === 'completed' ? "bg-emerald-100 text-emerald-800" :
+                              selectedSession.onboarding.status === 'submitted' ? "bg-blue-100 text-blue-800" :
+                              selectedSession.onboarding.status === 'in_progress' ? "bg-amber-100 text-amber-800" :
+                              "bg-neutral-100 text-neutral-800"
+                            )}>
+                              {selectedSession.onboarding.status === 'invited' ? t.onboardingStatusInvited :
+                               selectedSession.onboarding.status === 'in_progress' ? t.onboardingStatusInProgress :
+                               selectedSession.onboarding.status === 'submitted' ? t.onboardingStatusSubmitted :
+                               t.onboardingStatusCompleted}
+                            </span>
+                          </div>
+                        )}
+                      </div>
+                      
+                      {!selectedSession.onboarding || selectedSession.onboarding.status === 'not_started' ? (
+                        <button
+                          onClick={() => handleOnboardingAction(`/api/admin/sessions/${selectedSession.id}/onboarding/invite`)}
+                          disabled={isOnboardingActionLoading}
+                          className="flex items-center gap-2 px-4 py-2 bg-[#4B2C20] text-[#FAF7F2] rounded-xl text-xs font-bold uppercase tracking-wider hover:bg-[#3E2723] transition-colors shadow-xs disabled:opacity-50"
+                        >
+                          {isOnboardingActionLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Mail className="w-4 h-4 text-[#D4A373]" />}
+                          {isOnboardingActionLoading ? t.onboardingInitiatingBtn : t.onboardingInitiateBtn}
+                        </button>
+                      ) : (
+                        <div className="flex items-center gap-3">
+                          {selectedSession.onboarding.status !== 'completed' && (
+                            <button
+                              onClick={() => handleOnboardingAction(`/api/admin/sessions/${selectedSession.id}/onboarding/renew`)}
+                              disabled={isOnboardingActionLoading}
+                              className="flex items-center gap-1.5 px-3 py-1.5 border border-[#E8DFD8] text-[#4B2C20] hover:bg-[#FAF7F2] rounded-lg text-[11px] font-bold uppercase tracking-wider transition-colors disabled:opacity-50"
+                            >
+                              <RotateCcw className="w-3.5 h-3.5" />
+                              {t.onboardingRenewBtn}
+                            </button>
+                          )}
+                          {selectedSession.onboarding.status !== 'completed' && (
+                            <button
+                              onClick={() => handleOnboardingAction(`/api/admin/sessions/${selectedSession.id}/onboarding/complete`)}
+                              disabled={isOnboardingActionLoading}
+                              className="flex items-center gap-1.5 px-3 py-1.5 bg-emerald-700 text-white hover:bg-emerald-800 rounded-lg text-[11px] font-bold uppercase tracking-wider transition-colors shadow-xs disabled:opacity-50"
+                            >
+                              <CheckCircle2 className="w-3.5 h-3.5" />
+                              {t.onboardingCompleteBtn}
+                            </button>
+                          )}
+                        </div>
+                      )}
+                    </div>
+
+                    {selectedSession.onboarding && selectedSession.onboarding.status !== 'not_started' && (
+                      <div className="space-y-6">
+                        <div className="bg-amber-50 border border-amber-200 rounded-xl p-4 flex gap-3 text-sm text-amber-900">
+                          <AlertCircle className="w-5 h-5 text-amber-700 shrink-0" />
+                          <p>{t.onboardingPIIWarning}</p>
+                        </div>
+                        
+                        <div className="space-y-3">
+                          {selectedSession.onboarding.requiredDocTypes.map((docType) => {
+                            const doc = selectedSession.onboarding?.documents.find(d => d.docType === docType);
+                            return (
+                              <div key={docType} className="flex items-center justify-between p-4 bg-[#FAF7F2] border border-[#E8DFD8] rounded-xl">
+                                <div className="flex items-center gap-3">
+                                  {doc ? <CheckCircle2 className="w-5 h-5 text-emerald-600" /> : <Clock className="w-5 h-5 text-amber-500" />}
+                                  <div>
+                                    <p className="font-medium text-[#4B2C20]">{docType.replace('_', ' ').toUpperCase()}</p>
+                                    <p className="text-xs text-[#4B2C20]/60">
+                                      {doc ? `${t.onboardingDocUploaded}: ${doc.fileName}` : t.onboardingDocPending}
+                                    </p>
+                                  </div>
+                                </div>
+                                {doc && (
+                                  <div className="flex items-center gap-2">
+                                    <button
+                                      onClick={() => handleOnboardingDownload(docType)}
+                                      disabled={isOnboardingActionLoading}
+                                      className="px-3 py-1.5 bg-[#4B2C20] text-[#FAF7F2] rounded-lg text-xs font-bold hover:bg-[#3E2723] transition-colors shadow-xs disabled:opacity-50"
+                                    >
+                                      Descargar
+                                    </button>
+                                    <button
+                                      onClick={() => {
+                                        if (confirm('¿Eliminar este documento?')) {
+                                          handleOnboardingAction(`/api/admin/sessions/${selectedSession.id}/onboarding/doc/${docType}`, 'DELETE');
+                                        }
+                                      }}
+                                      disabled={isOnboardingActionLoading}
+                                      className="p-1.5 text-red-600 hover:bg-red-50 rounded-lg transition-colors border border-transparent hover:border-red-200 disabled:opacity-50"
+                                      title="Eliminar documento"
+                                    >
+                                      <Trash2 className="w-4 h-4" />
+                                    </button>
+                                  </div>
+                                )}
+                              </div>
+                            );
+                          })}
+                        </div>
+
+                        {selectedSession.onboarding.documents.length > 0 && (
+                          <div className="pt-6 border-t border-[#E8DFD8] flex justify-end">
+                            <button
+                              onClick={() => {
+                                if (confirm(t.onboardingConfirmDeleteAll)) {
+                                  handleOnboardingAction(`/api/admin/sessions/${selectedSession.id}/onboarding/all`, 'DELETE');
+                                }
+                              }}
+                              disabled={isOnboardingActionLoading}
+                              className="flex items-center gap-2 px-4 py-2 text-xs font-bold uppercase tracking-wider text-red-700 hover:bg-red-50 rounded-xl transition-colors border border-red-200 disabled:opacity-50"
+                            >
+                              <Trash2 className="w-4 h-4" />
+                              {t.onboardingDeleteAllBtn}
+                            </button>
+                          </div>
+                        )}
+                      </div>
+                    )}
                   </div>
                 </div>
               )}

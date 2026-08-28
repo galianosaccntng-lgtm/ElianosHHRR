@@ -3,6 +3,7 @@ import { Welcome } from './components/Welcome';
 import { Interview } from './components/Interview';
 import { Dashboard } from './components/Dashboard';
 import { AdminLoginModal } from './components/AdminLoginModal';
+import { Onboarding } from './components/Onboarding';
 import { Position, InterviewSession, CandidateInfo } from './types';
 
 const STORAGE_KEY = 'ellianos_candidate_sessions_v1';
@@ -161,6 +162,11 @@ export default function App() {
   };
 
   const currentSession = sessions.find(s => s.id === currentSessionId);
+  const isOnboardingRoute = window.location.pathname === '/onboarding';
+
+  if (isOnboardingRoute) {
+    return <Onboarding />;
+  }
 
   if (showDashboard) {
     return (

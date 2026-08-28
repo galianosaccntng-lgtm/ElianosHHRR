@@ -63,6 +63,24 @@ export interface SecondInterviewScores {
   updatedAt: string;
 }
 
+export interface OnboardingDoc {
+  docType: string;
+  fileName: string;
+  storagePath: string;
+  sizeBytes: number;
+  contentType: string;
+  uploadedAt: string;
+}
+
+export interface OnboardingState {
+  status: 'not_started' | 'invited' | 'in_progress' | 'submitted' | 'completed';
+  token: string;
+  tokenExpiresAt: string;
+  invitedAt?: string;
+  documents: OnboardingDoc[];
+  requiredDocTypes: string[];
+}
+
 export interface InterviewSession {
   id: string;
   position: Position;
@@ -76,6 +94,7 @@ export interface InterviewSession {
   followUpSentAt?: string;
   secondInterviewGuide?: SecondInterviewGuide;
   secondInterviewScores?: SecondInterviewScores;
+  onboarding?: OnboardingState;
 }
 
 
