@@ -83,6 +83,7 @@ const evaluateLimiter = createRateLimiter(10 * 60 * 1000, 5, "Too many evaluatio
 const adminFollowUpLimiter = createRateLimiter(60 * 60 * 1000, 10, "Too many follow-up emails sent. Please try again later (maximum 10 per hour).");
 const secondInterviewGuideLimiter = createRateLimiter(60 * 60 * 1000, 10, "Demasiadas solicitudes de generación de guía. Por favor intente más tarde.");
 const findIncompleteLimiter = createRateLimiter(15 * 60 * 1000, 10, "Too many search requests. Please try again in 15 minutes.");
+const adminOnboardingLimiter = createRateLimiter(60 * 60 * 1000, 10, "Too many onboarding invites sent. Please try again later (maximum 10 per hour).");
 
 // Centralized admin authentication verification helper
 function verifyAdminAccess(provided: string | undefined, res: express.Response): boolean {
@@ -1280,7 +1281,48 @@ ${(messages || []).map((m: any) => `[${(m.role || "USER").toUpperCase()}]: ${m.p
 
 const REQUIRED_DOC_TYPES = ['photo_id', 'work_authorization', 'direct_deposit', 'emergency_contact'];
 
-app.post("/api/admin/sessions/:id/onboarding/invite", async (req, res) => {
+async function sendOnboardingEmail(session: any): Promise<boolean> {
+  const transporter = getMailTransporter();
+  if (!transporter) {
+    console.warn("[Onboarding] Email no enviado: credenciales SMTP no configuradas");
+    return false;
+  }
+
+  if (!session.onboarding || !session.onboarding.token) {
+    return false;
+  }
+
+  const appUrl = process.env.APP_URL ? process.env.APP_URL.trim() : "";
+  const onboardingLink = `${appUrl}/onboarding?token=${session.onboarding.token}`;
+  
+  const candidateName = session.candidateInfo?.name || "there";
+  const userResponses = (session.messages || []).filter((m: any) => m.role === "user");
+  const allUserText = userResponses.map((m: any) => m.parts?.[0]?.text || "").join(" ").toLowerCase();
+  const isSpanishSpeaker = allUserText.includes("gracias") || allUserText.includes("hola");
+
+  const subject = isSpanishSpeaker 
+    ? `¡Felicidades y Bienvenido/a a Ellianos Coffee!` 
+    : `Congratulations and Welcome to Ellianos Coffee!`;
+    
+  const text = isSpanishSpeaker
+    ? `Hola ${candidateName},\n\n¡Felicidades por haber sido contratado/a para unirte a Ellianos Coffee!\n\nPor favor, completa tu proceso de incorporación (onboarding) y sube tus documentos requeridos de manera segura a través de este enlace:\n\n${onboardingLink}\n\nEste enlace caducará en 7 días.\n\nSaludos,\nEl equipo de Ellianos`
+    : `Hi ${candidateName},\n\nCongratulations on being hired to join Ellianos Coffee!\n\nPlease complete your onboarding and securely upload your required documents via this link:\n\n${onboardingLink}\n\nThis link will expire in 7 days.\n\nBest regards,\nThe Ellianos Team`;
+
+  try {
+    await transporter.sendMail({
+      from: process.env.EMAIL_USER,
+      to: session.candidateInfo.email,
+      subject,
+      text,
+    });
+    return true;
+  } catch (e) {
+    console.warn("Failed to send onboarding email", e);
+    return false;
+  }
+}
+
+app.post("/api/admin/sessions/:id/onboarding/invite", adminOnboardingLimiter, async (req, res) => {
   const authHeader = req.headers["x-admin-passcode"] as string | undefined;
   if (!verifyAdminAccess(authHeader, res)) return;
 
@@ -1302,41 +1344,12 @@ app.post("/api/admin/sessions/:id/onboarding/invite", async (req, res) => {
   };
 
   await upsertSession(session);
+  const emailSent = await sendOnboardingEmail(session);
 
-  const appUrl = process.env.APP_URL ? process.env.APP_URL.trim() : "";
-  const onboardingLink = `${appUrl}/onboarding?token=${token}`;
-  
-  const transporter = getMailTransporter();
-  if (transporter) {
-    const candidateName = session.candidateInfo?.name || "there";
-    const userResponses = (session.messages || []).filter((m: any) => m.role === "user");
-    const allUserText = userResponses.map((m: any) => m.parts?.[0]?.text || "").join(" ").toLowerCase();
-    const isSpanishSpeaker = allUserText.includes("gracias") || allUserText.includes("hola");
-
-    const subject = isSpanishSpeaker 
-      ? `¡Felicidades y Bienvenido/a a Ellianos Coffee!` 
-      : `Congratulations and Welcome to Ellianos Coffee!`;
-      
-    const text = isSpanishSpeaker
-      ? `Hola ${candidateName},\n\n¡Felicidades por haber sido contratado/a para unirte a Ellianos Coffee!\n\nPor favor, completa tu proceso de incorporación (onboarding) y sube tus documentos requeridos de manera segura a través de este enlace:\n\n${onboardingLink}\n\nEste enlace caducará en 7 días.\n\nSaludos,\nEl equipo de Ellianos`
-      : `Hi ${candidateName},\n\nCongratulations on being hired to join Ellianos Coffee!\n\nPlease complete your onboarding and securely upload your required documents via this link:\n\n${onboardingLink}\n\nThis link will expire in 7 days.\n\nBest regards,\nThe Ellianos Team`;
-
-    try {
-      await transporter.sendMail({
-        from: process.env.EMAIL_USER,
-        to: session.candidateInfo.email,
-        subject,
-        text,
-      });
-    } catch (e) {
-      console.warn("Failed to send onboarding email", e);
-    }
-  }
-
-  res.json({ success: true, onboarding: session.onboarding });
+  res.json({ success: true, emailSent, onboarding: session.onboarding });
 });
 
-app.post("/api/admin/sessions/:id/onboarding/renew", async (req, res) => {
+app.post("/api/admin/sessions/:id/onboarding/renew", adminOnboardingLimiter, async (req, res) => {
   const authHeader = req.headers["x-admin-passcode"] as string | undefined;
   if (!verifyAdminAccess(authHeader, res)) return;
 
@@ -1351,7 +1364,9 @@ app.post("/api/admin/sessions/:id/onboarding/renew", async (req, res) => {
   session.onboarding.status = session.onboarding.status === 'completed' ? 'invited' : session.onboarding.status;
 
   await upsertSession(session);
-  res.json({ success: true, onboarding: session.onboarding });
+  const emailSent = await sendOnboardingEmail(session);
+
+  res.json({ success: true, emailSent, onboarding: session.onboarding });
 });
 
 app.get("/api/admin/sessions/:id/onboarding/doc/:docType/url", async (req, res) => {

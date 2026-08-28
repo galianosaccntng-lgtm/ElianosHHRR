@@ -612,10 +612,12 @@ ${t.copyContactStatus} ${effectiveStatusLabel}`;
   });
 
   const [isOnboardingActionLoading, setIsOnboardingActionLoading] = useState(false);
+  const [onboardingMessage, setOnboardingMessage] = useState<{type: 'success'|'warning', text: string} | null>(null);
 
   const handleOnboardingAction = async (actionUrl: string, method: string = 'POST') => {
     if (!adminToken) return;
     setIsOnboardingActionLoading(true);
+    setOnboardingMessage(null);
     try {
       const res = await fetch(actionUrl, {
         method,
@@ -624,7 +626,16 @@ ${t.copyContactStatus} ${effectiveStatusLabel}`;
         },
       });
       if (res.ok) {
+        const data = await res.json();
         await fetchServerSessions();
+        if (data.onboarding && (actionUrl.includes('/invite') || actionUrl.includes('/renew'))) {
+          const session = sessions.find(s => s.id === selectedSessionId) || { candidateInfo: { email: 'el candidato' } };
+          if (data.emailSent) {
+            setOnboardingMessage({ type: 'success', text: `Correo enviado a ${session.candidateInfo.email}` });
+          } else {
+            setOnboardingMessage({ type: 'warning', text: 'Enlace generado, pero el correo no pudo enviarse — revisa la configuración de correo' });
+          }
+        }
       } else {
         const err = await res.json();
         alert(err.error || "An error occurred");
@@ -2147,6 +2158,15 @@ ${t.copyContactStatus} ${effectiveStatusLabel}`;
                         </div>
                       )}
                     </div>
+
+                    {onboardingMessage && (
+                      <div className={clsx("mb-6 p-4 rounded-xl flex gap-3 text-sm", 
+                        onboardingMessage.type === 'success' ? "bg-emerald-50 border border-emerald-200 text-emerald-900" : "bg-amber-50 border border-amber-200 text-amber-900"
+                      )}>
+                        {onboardingMessage.type === 'success' ? <CheckCircle2 className="w-5 h-5 text-emerald-600 shrink-0" /> : <AlertCircle className="w-5 h-5 text-amber-600 shrink-0" />}
+                        <p>{onboardingMessage.text}</p>
+                      </div>
+                    )}
 
                     {selectedSession.onboarding && selectedSession.onboarding.status !== 'not_started' && (
                       <div className="space-y-6">
