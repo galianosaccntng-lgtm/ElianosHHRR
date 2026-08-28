@@ -1315,6 +1315,7 @@ async function sendOnboardingEmail(session: any): Promise<boolean> {
       subject,
       text,
     });
+    console.log(`[Onboarding] Email enviado a ${session.candidateInfo.email}`);
     return true;
   } catch (e) {
     console.warn("Failed to send onboarding email", e);
@@ -1384,16 +1385,55 @@ app.get("/api/admin/sessions/:id/onboarding/doc/:docType/url", async (req, res) 
   if (!doc) return res.status(404).json({ error: "Document not found" });
 
   try {
-    const [url] = await storageClient.bucket(ONBOARDING_BUCKET).file(doc.storagePath).getSignedUrl({
-      version: 'v4',
-      action: 'read',
-      expires: Date.now() + 15 * 60 * 1000,
-    });
+    let url: string | undefined = undefined;
+    if (storageClient && ONBOARDING_BUCKET) {
+      try {
+        const [signedUrl] = await storageClient.bucket(ONBOARDING_BUCKET).file(doc.storagePath).getSignedUrl({
+          version: 'v4',
+          action: 'read',
+          expires: Date.now() + 15 * 60 * 1000,
+        });
+        url = signedUrl;
+      } catch (gcsErr: any) {
+        if (gcsErr?.message?.includes('access') || gcsErr?.message?.includes('PERMISSION_DENIED')) {
+          console.warn("[Storage] Sandbox permissions error. Falling back to local URL.");
+        } else {
+          throw gcsErr;
+        }
+      }
+    }
+
+    if (!url) {
+      // Local fallback URL
+      url = `/api/admin/sessions/${id}/onboarding/doc/${docType}/local?token=${req.headers["x-admin-passcode"]}`;
+    }
+
     res.json({ url });
   } catch (err) {
     console.error("Signed URL error:", err);
     res.status(500).json({ error: "Failed to generate signed URL" });
   }
+});
+
+app.get("/api/admin/sessions/:id/onboarding/doc/:docType/local", async (req, res) => {
+  const token = req.query.token as string | undefined;
+  if (!verifyAdminAccess(token, res)) return;
+
+  const { id, docType } = req.params;
+  const sessions = await getStoredSessions();
+  const session = sessions.find((s) => s.id === id);
+  const doc = session?.onboarding?.documents?.find((d: any) => d.docType === docType);
+  if (!doc) return res.status(404).json({ error: "Document not found" });
+
+  const path = require('path');
+  const fs = require('fs');
+  const localPath = path.join(process.cwd(), "data", doc.storagePath);
+  
+  if (!fs.existsSync(localPath)) {
+    return res.status(404).json({ error: "Local file not found" });
+  }
+  
+  res.sendFile(localPath);
 });
 
 app.post("/api/admin/sessions/:id/onboarding/complete", async (req, res) => {
@@ -1474,8 +1514,12 @@ async function getSessionByToken(token: string) {
     try {
       const snapshot = await firestoreClient.collection("interviews").where("onboarding.token", "==", token).get();
       snapshot.forEach((doc: any) => sessions.push(doc.data()));
-    } catch (e) {
-      console.warn("Firestore token lookup error", e);
+    } catch (e: any) {
+      if (e?.code === 7 || e?.message?.includes('PERMISSION_DENIED')) {
+        // Suppress expected sandbox errors
+      } else {
+        console.warn("Firestore token lookup error", e);
+      }
       sessions = getLocalSessions();
     }
   } else {
@@ -1544,11 +1588,31 @@ app.post("/api/onboarding/upload", upload.single("file"), async (req, res) => {
   const storagePath = `onboarding/${session.id}/${docType}/${crypto.randomUUID()}-${filenameSanitizado}`;
 
   try {
-    const bucketFile = storageClient.bucket(ONBOARDING_BUCKET).file(storagePath);
-    await bucketFile.save(file.buffer, {
-      contentType: file.mimetype,
-      resumable: false
-    });
+    let savedToGcs = false;
+    if (storageClient && ONBOARDING_BUCKET) {
+      try {
+        const bucketFile = storageClient.bucket(ONBOARDING_BUCKET).file(storagePath);
+        await bucketFile.save(file.buffer, {
+          contentType: file.mimetype,
+          resumable: false
+        });
+        savedToGcs = true;
+      } catch (gcsErr: any) {
+        if (gcsErr?.message?.includes('access') || gcsErr?.message?.includes('PERMISSION_DENIED')) {
+          console.warn("[Storage] Sandbox permissions error. Falling back to local storage for upload.");
+        } else {
+          throw gcsErr;
+        }
+      }
+    }
+
+    if (!savedToGcs) {
+      const fs = require('fs');
+      const path = require('path');
+      const localPath = path.join(process.cwd(), "data", storagePath);
+      fs.mkdirSync(path.dirname(localPath), { recursive: true });
+      fs.writeFileSync(localPath, file.buffer);
+    }
 
     const docIndex = session.onboarding.documents.findIndex((d: any) => d.docType === docType);
     const newDoc = {
@@ -1557,12 +1621,20 @@ app.post("/api/onboarding/upload", upload.single("file"), async (req, res) => {
       storagePath,
       sizeBytes: file.size,
       contentType: file.mimetype,
-      uploadedAt: new Date().toISOString()
+      uploadedAt: new Date().toISOString(),
+      isLocal: !savedToGcs
     };
 
     if (docIndex > -1) {
       const oldDoc = session.onboarding.documents[docIndex];
-      try { await storageClient.bucket(ONBOARDING_BUCKET).file(oldDoc.storagePath).delete(); } catch(e) {}
+      if (storageClient && ONBOARDING_BUCKET) {
+        try { await storageClient.bucket(ONBOARDING_BUCKET).file(oldDoc.storagePath).delete(); } catch(e) {}
+      }
+      try {
+        const fs = require('fs');
+        const path = require('path');
+        fs.unlinkSync(path.join(process.cwd(), "data", oldDoc.storagePath));
+      } catch(e) {}
       session.onboarding.documents[docIndex] = newDoc;
     } else {
       session.onboarding.documents.push(newDoc);
