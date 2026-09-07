@@ -1787,12 +1787,13 @@ Return a strict JSON object with this structure:
     const aiResult = JSON.parse(rawText);
 
     // Merge into session
-    const prevLive = session.liveInterview || { 
-      consentConfirmedAt: consentConfirmedAt,
-      startedAt: new Date().toISOString(),
-      transcript: accumulatedTranscript || '',
-      blockStatus: accumulatedBlockStatus || {},
-      suggestions: []
+    const prevLive = {
+      ...session.liveInterview,
+      consentConfirmedAt: session.liveInterview?.consentConfirmedAt || consentConfirmedAt,
+      startedAt: session.liveInterview?.startedAt || new Date().toISOString(),
+      transcript: accumulatedTranscript !== undefined ? accumulatedTranscript : (session.liveInterview?.transcript || ''),
+      blockStatus: accumulatedBlockStatus || session.liveInterview?.blockStatus || {},
+      suggestions: session.liveInterview?.suggestions || []
     };
 
     const newTranscript = (prevLive.transcript ? prevLive.transcript + '\n\n' : '') + (aiResult.transcriptSegment || '');

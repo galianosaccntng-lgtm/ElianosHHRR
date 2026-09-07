@@ -15,7 +15,19 @@ export function LiveInterviewPanel({
   onDumpScores: (scores: Record<string, number>) => void;
 }) {
   const guide = session.secondInterviewGuide;
-  const liveState = session.liveInterview;
+  const [liveState, setLiveState] = useState(session.liveInterview);
+  const liveStateRef = useRef(liveState);
+  
+  useEffect(() => {
+    setLiveState(session.liveInterview);
+    liveStateRef.current = session.liveInterview;
+  }, [session.id]);
+
+  const updateLocalState = (newState: LiveInterviewState) => {
+    setLiveState(newState);
+    liveStateRef.current = newState;
+  };
+
   const [hasConsent, setHasConsent] = useState(!!liveState?.consentConfirmedAt);
   const [showConsentModal, setShowConsentModal] = useState(false);
   
@@ -160,7 +172,7 @@ export function LiveInterviewPanel({
 
     // Final save
     try {
-      await fetch(`/api/admin/sessions/${session.id}/live-interview/analyze`, {
+      const res = await fetch(`/api/admin/sessions/${session.id}/live-interview/analyze`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -170,6 +182,10 @@ export function LiveInterviewPanel({
           isFinal: true
         })
       });
+      const data = await res.json();
+      if (data.success && data.liveInterview) {
+        updateLocalState(data.liveInterview);
+      }
       onStateUpdate();
     } catch (e) {
       console.error(e);
@@ -182,7 +198,7 @@ export function LiveInterviewPanel({
     reader.onloadend = async () => {
       const base64data = reader.result as string;
       try {
-        await fetch(`/api/admin/sessions/${session.id}/live-interview/analyze`, {
+        const res = await fetch(`/api/admin/sessions/${session.id}/live-interview/analyze`, {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
@@ -190,12 +206,15 @@ export function LiveInterviewPanel({
           },
           body: JSON.stringify({
             audioData: base64data,
-            mimeType: blob.type,
-            accumulatedTranscript: session.liveInterview?.transcript,
-            accumulatedBlockStatus: session.liveInterview?.blockStatus
+            mimeType: blob.type
+            
+            
           })
         });
-        onStateUpdate();
+        const data = await res.json();
+        if (data.success && data.liveInterview) {
+          updateLocalState(data.liveInterview);
+        }
       } catch (e) {
         console.error("Failed to analyze chunk", e);
       }
