@@ -132,7 +132,7 @@ function handleFirestoreError(context: string, e: any) {
 // Initialize Firestore for durable Cloud persistence across all environments
 let firestoreClient: Firestore | null = null;
 try {
-  const options: any = {};
+  const options: any = { ignoreUndefinedProperties: true };
   if (firebaseConfig?.projectId) {
     options.projectId = firebaseConfig.projectId;
   }
