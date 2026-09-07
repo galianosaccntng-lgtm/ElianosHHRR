@@ -81,6 +81,29 @@ export interface OnboardingState {
   requiredDocTypes: string[];
 }
 
+export interface LiveInterviewBlockStatus {
+  status: 'covered' | 'partial' | 'not_addressed';
+  confidence: number;
+  evidence: string;
+}
+
+export interface LiveInterviewSuggestion {
+  text: string;
+  isFlag: boolean;
+  relatedBlockId?: string;
+}
+
+export interface LiveInterviewState {
+  consentConfirmedAt?: string;
+  startedAt?: string;
+  endedAt?: string;
+  transcript: string;
+  blockStatus: Record<string, LiveInterviewBlockStatus>;
+  suggestions: LiveInterviewSuggestion[];
+  languageNote?: string;
+  updatedAt: string;
+}
+
 export interface InterviewSession {
   id: string;
   position: Position;
@@ -95,6 +118,7 @@ export interface InterviewSession {
   secondInterviewGuide?: SecondInterviewGuide;
   secondInterviewScores?: SecondInterviewScores;
   onboarding?: OnboardingState;
+  liveInterview?: LiveInterviewState;
 }
 
 

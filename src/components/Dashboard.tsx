@@ -5,6 +5,7 @@ import clsx from 'clsx';
 import Markdown from 'react-markdown';
 import { humanConfidence } from '../authenticity';
 import { adminI18n, AdminLang, getInitialAdminLang, setSavedAdminLang } from '../i18n-admin';
+import { LiveInterviewPanel } from "./LiveInterviewPanel";
 
 interface DashboardProps {
   adminToken: string | null;
@@ -1581,7 +1582,16 @@ ${t.copyContactStatus} ${effectiveStatusLabel}`;
               {activeTab === 'secondInterview' && (
                 <div className="space-y-6">
                   {selectedSession.secondInterviewGuide ? (
-                    (() => {
+                    <>
+                      <LiveInterviewPanel 
+                        session={selectedSession}
+                        adminToken={adminToken!}
+                        onStateUpdate={fetchServerSessions}
+                        onDumpScores={(newScores) => {
+                          setScores(prev => ({ ...prev, ...newScores }));
+                        }}
+                      />
+                      {(() => {
                       const guide = selectedSession.secondInterviewGuide;
                       const allQuestions = guide.questions || [];
                       const totalQuestions = allQuestions.length;
@@ -1992,7 +2002,8 @@ ${t.copyContactStatus} ${effectiveStatusLabel}`;
                           </div>
                         </div>
                       );
-                    })()
+                    })()}
+                    </>
                   ) : (
                     <div className="bg-white border border-[#E8DFD8] rounded-2xl p-8 md:p-12 shadow-xs text-center space-y-4">
                       <div className="w-14 h-14 bg-purple-50 border border-purple-200 rounded-2xl flex items-center justify-center mx-auto text-purple-700">

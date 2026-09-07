@@ -86,6 +86,7 @@ const adminFollowUpLimiter = createRateLimiter(60 * 60 * 1000, 10, "Too many fol
 const secondInterviewGuideLimiter = createRateLimiter(60 * 60 * 1000, 10, "Demasiadas solicitudes de generación de guía. Por favor intente más tarde.");
 const findIncompleteLimiter = createRateLimiter(15 * 60 * 1000, 10, "Too many search requests. Please try again in 15 minutes.");
 const adminOnboardingLimiter = createRateLimiter(60 * 60 * 1000, 10, "Too many onboarding invites sent. Please try again later (maximum 10 per hour).");
+const liveInterviewAnalyzeLimiter = createRateLimiter(60 * 60 * 1000, 120, "Too many live interview analyze requests. Please try again later (maximum 120 per hour).");
 
 // Centralized admin authentication verification helper
 function verifyAdminAccess(provided: string | undefined, res: express.Response): boolean {
@@ -120,6 +121,14 @@ try {
   console.warn("[Storage] Could not read firebase-applet-config.json:", e);
 }
 
+function handleFirestoreError(context: string, e: any) {
+  if (e?.code === 7 || e?.message?.includes('PERMISSION_DENIED')) {
+    console.warn(`[Storage] ${context}: Permission denied (Firestore API not enabled or configured). Falling back to local storage.`);
+  } else {
+    console.warn(`[Storage] ${context}:`, e.message || e);
+  }
+}
+
 // Initialize Firestore for durable Cloud persistence across all environments
 let firestoreClient: Firestore | null = null;
 try {
@@ -133,7 +142,7 @@ try {
   firestoreClient = new Firestore(options);
   console.log(`[Storage] Initialized Cloud Firestore persistence (Project: ${firebaseConfig?.projectId || 'default'}, DB: ${firebaseConfig?.firestoreDatabaseId || '(default)'})`);
 } catch (fsErr) {
-  console.warn("[Storage] Could not initialize Firestore client, fallback to local storage:", fsErr);
+  handleFirestoreError('Could not initialize Firestore client', fsErr);
   firestoreClient = null;
 }
 
@@ -173,7 +182,7 @@ async function syncLocalToFirestoreIfEmpty() {
       }
     }
   } catch (e) {
-    console.warn("[Storage] Cloud Firestore initial check:", e);
+    handleFirestoreError('Cloud Firestore initial check', e);
   }
 }
 syncLocalToFirestoreIfEmpty();
@@ -192,7 +201,7 @@ async function getStoredSessions(): Promise<any[]> {
         return tB - tA;
       });
     } catch (fsErr) {
-      console.warn("[Storage] Firestore read error, using local file storage:", fsErr);
+      handleFirestoreError('Firestore read error', fsErr);
     }
   }
   return getLocalSessions();
@@ -285,7 +294,7 @@ async function upsertSession(session: any): Promise<void> {
     try {
       await firestoreClient.collection("interviews").doc(safeSession.id).set(safeSession, { merge: true });
     } catch (fsErr) {
-      console.warn("[Storage] Firestore write error:", fsErr);
+      handleFirestoreError('Firestore write error', fsErr);
     }
   }
 }
@@ -299,7 +308,7 @@ async function deleteStoredSession(id: string): Promise<{ success: boolean }> {
     try {
       await firestoreClient.collection("interviews").doc(id).delete();
     } catch (fsErr) {
-      console.warn("[Storage] Firestore delete error:", fsErr);
+      handleFirestoreError('Firestore delete error', fsErr);
     }
   }
 
@@ -737,6 +746,7 @@ app.post("/api/sessions/sync", sessionSyncLimiter, async (req, res) => {
       secondInterviewGuide: _ignoredGuide,
       secondInterviewScores: _ignoredScores,
       onboarding: _ignoredOnboarding,
+      liveInterview: _ignoredLiveInterview,
       ...cleanSession
     } = session;
 
@@ -776,7 +786,7 @@ app.post("/api/sessions/find-incomplete", findIncompleteLimiter, async (req, res
           sessions.push(doc.data());
         });
       } catch (fsErr) {
-        console.warn("[FindIncomplete] Firestore error, falling back to local:", fsErr);
+        handleFirestoreError('FindIncomplete Firestore error', fsErr);
         sessions = getLocalSessions();
       }
     } else {
@@ -1517,11 +1527,7 @@ async function getSessionByToken(token: string) {
       const snapshot = await firestoreClient.collection("interviews").where("onboarding.token", "==", token).get();
       snapshot.forEach((doc: any) => sessions.push(doc.data()));
     } catch (e: any) {
-      if (e?.code === 7 || e?.message?.includes('PERMISSION_DENIED')) {
-        // Suppress expected sandbox errors
-      } else {
-        console.warn("Firestore token lookup error", e);
-      }
+      handleFirestoreError('Firestore token lookup error', e);
       sessions = getLocalSessions();
     }
   } else {
@@ -1665,6 +1671,154 @@ app.post("/api/onboarding/upload", upload.single("file"), async (req, res) => {
   }
 });
 
+app.post("/api/admin/sessions/:id/live-interview/analyze", liveInterviewAnalyzeLimiter, async (req, res) => {
+  const authHeader = req.headers["x-admin-passcode"] as string | undefined;
+  if (!verifyAdminAccess(authHeader, res)) return;
+
+  const { id } = req.params;
+  const { audioData, mimeType, accumulatedTranscript, accumulatedBlockStatus, consentConfirmedAt, isFinal } = req.body;
+  
+  const sessions = await getStoredSessions();
+  const session = sessions.find((s) => s.id === id);
+  if (!session) return res.status(404).json({ error: "Session not found" });
+
+  if (!session.secondInterviewGuide) {
+    return res.status(400).json({ error: "No second interview guide exists for this session." });
+  }
+
+  // Handle final save or consent update without audio
+  if (!audioData) {
+    session.liveInterview = {
+      ...(session.liveInterview || { blockStatus: {}, suggestions: [], transcript: '' }),
+      consentConfirmedAt: consentConfirmedAt || session.liveInterview?.consentConfirmedAt,
+      transcript: accumulatedTranscript !== undefined ? accumulatedTranscript : (session.liveInterview?.transcript || ''),
+      blockStatus: accumulatedBlockStatus || session.liveInterview?.blockStatus || {},
+      updatedAt: new Date().toISOString(),
+      ...(isFinal ? { endedAt: new Date().toISOString() } : {})
+    };
+    if (session.liveInterview.consentConfirmedAt && !session.liveInterview.startedAt) {
+      session.liveInterview.startedAt = new Date().toISOString();
+    }
+    await upsertSession(session);
+    return res.json({ success: true, liveInterview: session.liveInterview });
+  }
+
+  try {
+    const audioBuffer = Buffer.from(audioData.split(',')[1] || audioData, 'base64');
+    
+    // Construct the prompt for Gemini
+    const systemPrompt = `You are an AI assistant for a human interviewer conducting a live bilingual (English/Spanish) job interview.
+You are receiving a short audio segment of the ongoing interview.
+Your task is to transcribe the audio and analyze how it maps to the interview guide blocks.
+
+IMPORTANT RULES:
+1. This is ASISTANCE for the human, NOT a final verdict. NEVER reject the candidate.
+2. The order of the conversation may NOT follow the guide order. Map whatever is said to the relevant block(s).
+3. The conversation may switch between English and Spanish frequently. Handle both natively.
+4. Non-native speakers using formal/broken language is NOT a red flag by itself.
+
+Interview Guide Blocks:
+${JSON.stringify(session.secondInterviewGuide.blocks.map(b => ({
+  id: b.id,
+  title: b.title,
+  goal: b.goal,
+  mustPass: b.mustPass,
+  listenFor: session.secondInterviewGuide?.questions.find(q => q.block === b.title)?.listenFor || [],
+  redFlags: session.secondInterviewGuide?.questions.find(q => q.block === b.title)?.redFlags || []
+}))) }
+
+Accumulated Block Status so far (do NOT regress a block from 'covered' unless explicitly contradicted, just add confidence/evidence):
+${JSON.stringify(accumulatedBlockStatus || {})}
+
+Return a strict JSON object with this structure:
+{
+  "transcriptSegment": "Transcription of THIS audio segment. Prefix with speaker if distinguishable (e.g. 'Entrevistador: ...' or 'Candidato: ...'). Mixed languages are fine.",
+  "blockUpdates": {
+    "block_id_here": {
+      "status": "covered" | "partial" | "not_addressed",
+      "confidence": number 0-100,
+      "evidence": "Brief evidence from this or previous segments backing this status (IN SPANISH)"
+    }
+  },
+  "suggestions": [
+    {
+      "text": "Short actionable suggestion for the interviewer IN SPANISH (e.g. 'Pregunta sobre su disponibilidad', 'Profundiza en su experiencia previa'). Prioritize 'must-pass' blocks not yet covered.",
+      "isFlag": boolean (true if it's a red flag warning from the guide),
+      "relatedBlockId": "optional_block_id_it_relates_to"
+    }
+  ],
+  "languageNote": "Optional note IN SPANISH if the candidate is struggling with English or only responding in Spanish to English questions."
+}`;
+
+    const response = await generateContentWithInfiniteResilience({
+      model: "gemini-1.5-flash",
+      contents: [
+        {
+          role: "user",
+          parts: [
+            { text: systemPrompt },
+            {
+              inlineData: {
+                data: audioBuffer.toString("base64"),
+                mimeType: mimeType || "audio/webm"
+              }
+            }
+          ]
+        }
+      ],
+      generationConfig: {
+        responseMimeType: "application/json",
+      }
+    });
+
+    if (!response.response.text()) {
+      throw new Error("Empty response from Gemini");
+    }
+
+    const aiResult = JSON.parse(response.response.text());
+
+    // Merge into session
+    const prevLive = session.liveInterview || { 
+      consentConfirmedAt: consentConfirmedAt,
+      startedAt: new Date().toISOString(),
+      transcript: accumulatedTranscript || '',
+      blockStatus: accumulatedBlockStatus || {},
+      suggestions: []
+    };
+
+    const newTranscript = (prevLive.transcript ? prevLive.transcript + '\n\n' : '') + (aiResult.transcriptSegment || '');
+    
+    // Merge block updates intelligently (don't degrade 'covered')
+    const newBlockStatus = { ...prevLive.blockStatus };
+    for (const [blockId, update] of Object.entries(aiResult.blockUpdates || {})) {
+      const existing = newBlockStatus[blockId];
+      if (existing && existing.status === 'covered' && (update as any).status !== 'covered') {
+        if ((update as any).status !== 'not_addressed') {
+          newBlockStatus[blockId] = update as any;
+        }
+      } else {
+        newBlockStatus[blockId] = update as any;
+      }
+    }
+
+    session.liveInterview = {
+      consentConfirmedAt: prevLive.consentConfirmedAt || consentConfirmedAt,
+      startedAt: prevLive.startedAt,
+      transcript: newTranscript,
+      blockStatus: newBlockStatus,
+      suggestions: aiResult.suggestions || [],
+      languageNote: aiResult.languageNote,
+      updatedAt: new Date().toISOString()
+    };
+
+    await upsertSession(session);
+    return res.json({ success: true, liveInterview: session.liveInterview, aiResult });
+
+  } catch (error: any) {
+    console.error("Error in live interview analysis:", error);
+    res.status(500).json({ success: false, error: error.message || "An error occurred during analysis." });
+  }
+});
 async function startServer() {
   if (process.env.NODE_ENV !== "production") {
     const vite = await createViteServer({
