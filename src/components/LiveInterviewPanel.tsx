@@ -22,15 +22,20 @@ export function LiveInterviewPanel({
   const [isRecording, setIsRecording] = useState(false);
   const [isPaused, setIsPaused] = useState(false);
   const [timeElapsed, setTimeElapsed] = useState(0);
+  const streamRef = useRef<MediaStream | null>(null);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
-  const audioChunksRef = useRef<Blob[]>([]);
   const timerRef = useRef<NodeJS.Timeout | null>(null);
+  const cycleTimerRef = useRef<NodeJS.Timeout | null>(null);
 
   useEffect(() => {
     return () => {
       if (timerRef.current) clearInterval(timerRef.current);
+      if (cycleTimerRef.current) clearTimeout(cycleTimerRef.current);
       if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
         mediaRecorderRef.current.stop();
+      }
+      if (streamRef.current) {
+        streamRef.current.getTracks().forEach(t => t.stop());
       }
     };
   }, []);
@@ -57,24 +62,51 @@ export function LiveInterviewPanel({
     }
   };
 
+  const getSupportedMimeType = () => {
+    const types = ['audio/ogg;codecs=opus', 'audio/mp4', 'audio/webm;codecs=opus'];
+    for (const t of types) {
+      if (MediaRecorder.isTypeSupported(t)) return t;
+    }
+    return '';
+  };
+
+  const startRecorderCycle = () => {
+    if (!streamRef.current) return;
+    
+    const mimeType = getSupportedMimeType();
+    if (!mimeType) {
+       alert("No hay formatos de audio soportados en este navegador para enviar a la IA.");
+       return;
+    }
+
+    const options = { mimeType };
+    const recorder = new MediaRecorder(streamRef.current, options);
+    
+    recorder.ondataavailable = (e) => {
+      if (e.data.size > 0) {
+        analyzeChunk(e.data);
+      }
+    };
+
+    recorder.start();
+    mediaRecorderRef.current = recorder;
+
+    cycleTimerRef.current = setTimeout(() => {
+       if (mediaRecorderRef.current && mediaRecorderRef.current.state === 'recording') {
+           mediaRecorderRef.current.stop(); // Emits ondataavailable with full chunk
+           startRecorderCycle();
+       }
+    }, 25000);
+  };
+
   const startRecording = async () => {
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      const options = { mimeType: 'audio/webm' };
-      const recorder = new MediaRecorder(stream, options);
+      if (!streamRef.current) {
+        streamRef.current = await navigator.mediaDevices.getUserMedia({ audio: true });
+      }
       
-      recorder.ondataavailable = async (e) => {
-        if (e.data.size > 0) {
-          audioChunksRef.current.push(e.data);
-          const chunk = e.data;
-          // Analyze chunk immediately
-          analyzeChunk(chunk);
-        }
-      };
+      startRecorderCycle();
 
-      // Request data every 25 seconds
-      recorder.start(25000);
-      mediaRecorderRef.current = recorder;
       setIsRecording(true);
       setIsPaused(false);
       
@@ -92,17 +124,32 @@ export function LiveInterviewPanel({
   const pauseRecording = () => {
     if (mediaRecorderRef.current && mediaRecorderRef.current.state === 'recording') {
       mediaRecorderRef.current.pause();
+      if (cycleTimerRef.current) clearTimeout(cycleTimerRef.current);
       setIsPaused(true);
     } else if (mediaRecorderRef.current && mediaRecorderRef.current.state === 'paused') {
       mediaRecorderRef.current.resume();
+      // Resume the cycle. We don't know exactly how much time is left, but we can just restart a 25s timer or shorter.
+      cycleTimerRef.current = setTimeout(() => {
+        if (mediaRecorderRef.current && mediaRecorderRef.current.state === 'recording') {
+          mediaRecorderRef.current.stop();
+          startRecorderCycle();
+        }
+      }, 25000);
       setIsPaused(false);
     }
   };
 
   const stopRecording = async () => {
+    if (cycleTimerRef.current) {
+      clearTimeout(cycleTimerRef.current);
+      cycleTimerRef.current = null;
+    }
     if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
       mediaRecorderRef.current.stop();
-      mediaRecorderRef.current.stream.getTracks().forEach(t => t.stop());
+    }
+    if (streamRef.current) {
+      streamRef.current.getTracks().forEach(t => t.stop());
+      streamRef.current = null;
     }
     setIsRecording(false);
     setIsPaused(false);

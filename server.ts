@@ -1340,8 +1340,17 @@ app.post("/api/admin/sessions/:id/onboarding/invite", adminOnboardingLimiter, as
   if (!verifyAdminAccess(authHeader, res)) return;
 
   const { id } = req.params;
-  const sessions = await getStoredSessions();
-  const session = sessions.find((s) => s.id === id);
+  let session: any = null;
+  if (firestoreClient) {
+    const docSnap = await firestoreClient.collection("interviews").doc(id).get();
+    if (docSnap.exists) {
+      session = docSnap.data();
+    }
+  }
+  if (!session) {
+    const sessions = getLocalSessions();
+    session = sessions.find((s) => s.id === id);
+  }
   if (!session) return res.status(404).json({ error: "Session not found" });
 
   const token = crypto.randomUUID() + crypto.randomBytes(32).toString('base64url');
@@ -1751,7 +1760,6 @@ Return a strict JSON object with this structure:
 }`;
 
     const response = await generateContentWithInfiniteResilience({
-      model: "gemini-1.5-flash",
       contents: [
         {
           role: "user",
@@ -1766,16 +1774,17 @@ Return a strict JSON object with this structure:
           ]
         }
       ],
-      generationConfig: {
+      config: {
         responseMimeType: "application/json",
       }
     });
 
-    if (!response.response.text()) {
+    const rawText = response?.text || "";
+    if (!rawText) {
       throw new Error("Empty response from Gemini");
     }
 
-    const aiResult = JSON.parse(response.response.text());
+    const aiResult = JSON.parse(rawText);
 
     // Merge into session
     const prevLive = session.liveInterview || { 
@@ -1792,9 +1801,9 @@ Return a strict JSON object with this structure:
     const newBlockStatus = { ...prevLive.blockStatus };
     for (const [blockId, update] of Object.entries(aiResult.blockUpdates || {})) {
       const existing = newBlockStatus[blockId];
-      if (existing && existing.status === 'covered' && (update as any).status !== 'covered') {
-        if ((update as any).status !== 'not_addressed') {
-          newBlockStatus[blockId] = update as any;
+      if (existing && existing.status === 'covered') {
+        if ((update as any).status === 'covered') {
+          newBlockStatus[blockId] = update as any; // update confidence/evidence
         }
       } else {
         newBlockStatus[blockId] = update as any;
