@@ -86,7 +86,7 @@ const adminFollowUpLimiter = createRateLimiter(60 * 60 * 1000, 10, "Too many fol
 const secondInterviewGuideLimiter = createRateLimiter(60 * 60 * 1000, 10, "Demasiadas solicitudes de generación de guía. Por favor intente más tarde.");
 const findIncompleteLimiter = createRateLimiter(15 * 60 * 1000, 10, "Too many search requests. Please try again in 15 minutes.");
 const adminOnboardingLimiter = createRateLimiter(60 * 60 * 1000, 10, "Too many onboarding invites sent. Please try again later (maximum 10 per hour).");
-const liveInterviewAnalyzeLimiter = createRateLimiter(60 * 60 * 1000, 120, "Too many live interview analyze requests. Please try again later (maximum 120 per hour).");
+const liveInterviewAnalyzeLimiter = createRateLimiter(60 * 60 * 1000, 400, "Too many live interview analyze requests. Please try again later (maximum 120 per hour).");
 
 // Centralized admin authentication verification helper
 function verifyAdminAccess(provided: string | undefined, res: express.Response): boolean {
@@ -1746,7 +1746,8 @@ Return a strict JSON object with this structure:
     "block_id_here": {
       "status": "covered" | "partial" | "not_addressed",
       "confidence": number 0-100,
-      "evidence": "Brief evidence from this or previous segments backing this status (IN SPANISH)"
+      "evidence": "Brief evidence from this or previous segments backing this status (IN SPANISH)",
+      "liveRating": "An integer from 1 to 5 reflecting the QUALITY of candidate responses in this block so far (1 = weak/concerning, 3 = acceptable, 5 = excellent). Use null if the block is not_addressed. Do NOT penalize for non-native language."
     }
   },
   "suggestions": [
@@ -1804,7 +1805,12 @@ Return a strict JSON object with this structure:
       const existing = newBlockStatus[blockId];
       if (existing && existing.status === 'covered') {
         if ((update as any).status === 'covered') {
-          newBlockStatus[blockId] = update as any; // update confidence/evidence
+          newBlockStatus[blockId] = update as any; 
+        } else {
+          // keep 'covered' status, but update liveRating if AI provided one
+          if ((update as any).liveRating !== undefined) {
+            existing.liveRating = (update as any).liveRating;
+          }
         }
       } else {
         newBlockStatus[blockId] = update as any;

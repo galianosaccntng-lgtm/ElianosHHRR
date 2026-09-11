@@ -23,6 +23,15 @@ export function LiveInterviewPanel({
     liveStateRef.current = session.liveInterview;
   }, [session.id]);
 
+  useEffect(() => {
+    if (transcriptScrollRef.current) {
+      const el = transcriptScrollRef.current;
+      // Auto-scroll if already near bottom or always to ensure it stays in view.
+      // A simple auto-scroll to bottom is acceptable per requirements.
+      el.scrollTo({ top: el.scrollHeight, behavior: 'smooth' });
+    }
+  }, [liveState?.transcript]);
+
   const updateLocalState = (newState: LiveInterviewState) => {
     setLiveState(newState);
     liveStateRef.current = newState;
@@ -38,6 +47,7 @@ export function LiveInterviewPanel({
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const timerRef = useRef<NodeJS.Timeout | null>(null);
   const cycleTimerRef = useRef<NodeJS.Timeout | null>(null);
+  const transcriptScrollRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     return () => {
@@ -108,7 +118,7 @@ export function LiveInterviewPanel({
            mediaRecorderRef.current.stop(); // Emits ondataavailable with full chunk
            startRecorderCycle();
        }
-    }, 25000);
+    }, 12000);
   };
 
   const startRecording = async () => {
@@ -146,7 +156,7 @@ export function LiveInterviewPanel({
           mediaRecorderRef.current.stop();
           startRecorderCycle();
         }
-      }, 25000);
+      }, 12000);
       setIsPaused(false);
     }
   };
@@ -296,7 +306,7 @@ export function LiveInterviewPanel({
           {/* Zona 1: Transcripción */}
           <div className="lg:col-span-1 bg-purple-50/50 rounded-2xl border border-purple-100 p-4 flex flex-col h-[400px]">
             <h4 className="font-bold text-purple-900 text-xs tracking-widest uppercase mb-3">Transcripción en Vivo</h4>
-            <div className="flex-1 overflow-y-auto space-y-3 pr-2 custom-scrollbar">
+            <div ref={transcriptScrollRef} className="flex-1 overflow-y-auto space-y-3 pr-2 custom-scrollbar">
               {liveState?.transcript ? (
                 liveState.transcript.split('\n\n').map((para, i) => (
                   <p key={i} className="text-sm text-gray-800 leading-relaxed bg-white p-3 rounded-xl shadow-sm border border-purple-50">{para}</p>
@@ -327,9 +337,28 @@ export function LiveInterviewPanel({
                     </div>
                     {b.mustPass && <span className="text-[10px] uppercase font-bold tracking-wider px-1.5 py-0.5 bg-white/60 rounded">Must-Pass</span>}
                     {status && (
-                      <div className="mt-2 text-xs opacity-90 leading-tight">
-                        <span className="font-bold">Confianza: {status.confidence}%</span>
-                        <p className="mt-1">{status.evidence}</p>
+                      <div className="mt-2 space-y-2">
+                        <div className="text-xs opacity-90 leading-tight">
+                          <span className="font-bold">Confianza: {status.confidence}%</span>
+                          <p className="mt-1">{status.evidence}</p>
+                        </div>
+                        <div className="pt-2 border-t border-current/10">
+                          <span className="text-[10px] uppercase tracking-wider font-bold opacity-80 block mb-1">Live Rating</span>
+                          <div className="flex gap-1">
+                            {[1, 2, 3, 4, 5].map(rating => (
+                              <div
+                                key={rating}
+                                className={`w-6 h-6 rounded-full flex items-center justify-center text-xs font-bold ${
+                                  status.liveRating === rating
+                                    ? 'bg-current text-white scale-110'
+                                    : 'bg-white/50 border border-current/20 opacity-50'
+                                }`}
+                              >
+                                {rating}
+                              </div>
+                            ))}
+                          </div>
+                        </div>
                       </div>
                     )}
                   </div>

@@ -85,6 +85,7 @@ export interface LiveInterviewBlockStatus {
   status: 'covered' | 'partial' | 'not_addressed';
   confidence: number;
   evidence: string;
+  liveRating?: number | null;
 }
 
 export interface LiveInterviewSuggestion {

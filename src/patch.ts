@@ -5,7 +5,9 @@ export function mapLiveStateToScores(liveState: LiveInterviewState, blocks: Seco
   for (const block of blocks) {
     const status = liveState.blockStatus?.[block.id];
     let score = 0;
-    if (status?.status === 'covered') {
+    if (status?.liveRating) {
+      score = status.liveRating;
+    } else if (status?.status === 'covered') {
       score = status.confidence > 80 ? 5 : 4;
     } else if (status?.status === 'partial') {
       score = status.confidence > 50 ? 3 : 2;
