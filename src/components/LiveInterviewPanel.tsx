@@ -43,6 +43,39 @@ export function LiveInterviewPanel({
   const [isRecording, setIsRecording] = useState(false);
   const [isPaused, setIsPaused] = useState(false);
   const [timeElapsed, setTimeElapsed] = useState(0);
+  const [probingBlockId, setProbingBlockId] = useState<string | null>(null);
+  const [probingLoading, setProbingLoading] = useState(false);
+  const [probingQuestions, setProbingQuestions] = useState<any[] | null>(null);
+  
+  const fetchProbeQuestions = async (blockId: string) => {
+    if (probingBlockId === blockId) {
+      setProbingBlockId(null);
+      setProbingQuestions(null);
+      return;
+    }
+    setProbingBlockId(blockId);
+    setProbingLoading(true);
+    setProbingQuestions(null);
+    try {
+      const res = await fetch(`/api/admin/sessions/${session.id}/live-interview/probe-questions`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-admin-passcode': adminToken
+        },
+        body: JSON.stringify({ blockId })
+      });
+      const data = await res.json();
+      if (data.success && data.questions) {
+        setProbingQuestions(data.questions);
+      }
+    } catch (e) {
+      console.error(e);
+    } finally {
+      setProbingLoading(false);
+    }
+  };
+
   const streamRef = useRef<MediaStream | null>(null);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const timerRef = useRef<NodeJS.Timeout | null>(null);
@@ -329,6 +362,8 @@ export function LiveInterviewPanel({
                                    status?.status === 'partial' ? 'text-amber-600 bg-amber-50 border-amber-200' :
                                    'text-gray-400 border-gray-100';
                 
+                const rating = status?.liveRating;
+                const isNotApproved = (b.mustPass && (rating == null || rating < 4)) || (status?.status !== 'covered');
                 return (
                   <div key={b.id} className={`p-3 rounded-xl border ${colorClass} transition-colors`}>
                     <div className="flex justify-between items-start mb-1">
@@ -339,26 +374,67 @@ export function LiveInterviewPanel({
                     {status && (
                       <div className="mt-2 space-y-2">
                         <div className="text-xs opacity-90 leading-tight">
-                          <span className="font-bold">Confianza: {status.confidence}%</span>
+                          <span className="font-bold block mb-1">Confianza: {status.confidence}%</span>
                           <p className="mt-1">{status.evidence}</p>
+                          {status.reasoning && (
+                            <p className="mt-1.5"><span className="font-bold">Por qué:</span> {status.reasoning}</p>
+                          )}
+                          {status.gaps && (
+                            <div className={`mt-1.5 p-2 rounded-lg ${isNotApproved && b.mustPass ? 'bg-amber-100 text-amber-900 border border-amber-300' : 'bg-gray-50 border border-gray-200'}`}>
+                              <span className="font-bold">Qué falta:</span> {Array.isArray(status.gaps) ? status.gaps.join(" ") : status.gaps}
+                            </div>
+                          )}
                         </div>
                         <div className="pt-2 border-t border-current/10">
                           <span className="text-[10px] uppercase tracking-wider font-bold opacity-80 block mb-1">Live Rating</span>
                           <div className="flex gap-1">
-                            {[1, 2, 3, 4, 5].map(rating => (
+                            {[1, 2, 3, 4, 5].map(ratingItem => (
                               <div
-                                key={rating}
+                                key={ratingItem}
                                 className={`w-6 h-6 rounded-full flex items-center justify-center text-xs font-bold ${
-                                  status.liveRating === rating
+                                  status.liveRating === ratingItem
                                     ? 'bg-current text-white scale-110'
                                     : 'bg-white/50 border border-current/20 opacity-50'
                                 }`}
                               >
-                                {rating}
+                                {ratingItem}
                               </div>
                             ))}
                           </div>
                         </div>
+                      </div>
+                    )}
+                    {isNotApproved && (
+                      <div 
+                        className="mt-3 pt-2 border-t border-current/10 cursor-pointer flex items-center justify-center text-xs font-bold opacity-70 hover:opacity-100 transition-opacity"
+                        onClick={() => fetchProbeQuestions(b.id)}
+                      >
+                        <span>Clic para preguntas de sondeo</span>
+                      </div>
+                    )}
+                    {probingBlockId === b.id && (
+                      <div className="mt-3 p-3 bg-indigo-50 border border-indigo-100 rounded-xl text-left">
+                        <div className="flex justify-between items-center mb-2">
+                          <h5 className="font-bold text-indigo-900 text-xs uppercase tracking-wider">Preguntas de Sondeo</h5>
+                          <button onClick={() => setProbingBlockId(null)} className="text-indigo-500 hover:text-indigo-900"><Square className="w-4 h-4" /></button>
+                        </div>
+                        {probingLoading ? (
+                          <div className="flex items-center justify-center p-4">
+                            <Loader2 className="w-5 h-5 animate-spin text-indigo-500" />
+                          </div>
+                        ) : probingQuestions ? (
+                          <div className="space-y-3">
+                            {probingQuestions.map((q, idx) => (
+                              <div key={idx} className="text-xs">
+                                <p className="font-bold text-indigo-900">{q.es}</p>
+                                <p className="italic text-indigo-700 mt-0.5">{q.en}</p>
+                                <p className="mt-1 text-indigo-800/80 leading-tight border-l-2 border-indigo-200 pl-2">{q.rationale}</p>
+                              </div>
+                            ))}
+                          </div>
+                        ) : (
+                          <div className="text-xs text-indigo-500">Error al cargar preguntas.</div>
+                        )}
                       </div>
                     )}
                   </div>

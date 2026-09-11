@@ -86,6 +86,8 @@ export interface LiveInterviewBlockStatus {
   confidence: number;
   evidence: string;
   liveRating?: number | null;
+  reasoning?: string;
+  gaps?: string | string[];
 }
 
 export interface LiveInterviewSuggestion {

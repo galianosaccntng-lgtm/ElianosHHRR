@@ -87,6 +87,7 @@ const secondInterviewGuideLimiter = createRateLimiter(60 * 60 * 1000, 10, "Demas
 const findIncompleteLimiter = createRateLimiter(15 * 60 * 1000, 10, "Too many search requests. Please try again in 15 minutes.");
 const adminOnboardingLimiter = createRateLimiter(60 * 60 * 1000, 10, "Too many onboarding invites sent. Please try again later (maximum 10 per hour).");
 const liveInterviewAnalyzeLimiter = createRateLimiter(60 * 60 * 1000, 400, "Too many live interview analyze requests. Please try again later (maximum 120 per hour).");
+const liveInterviewProbeLimiter = createRateLimiter(60 * 60 * 1000, 60, "Too many probe question requests. Please try again later.");
 
 // Centralized admin authentication verification helper
 function verifyAdminAccess(provided: string | undefined, res: express.Response): boolean {
@@ -1747,7 +1748,9 @@ Return a strict JSON object with this structure:
       "status": "covered" | "partial" | "not_addressed",
       "confidence": number 0-100,
       "evidence": "Brief evidence from this or previous segments backing this status (IN SPANISH)",
-      "liveRating": "An integer from 1 to 5 reflecting the QUALITY of candidate responses in this block so far (1 = weak/concerning, 3 = acceptable, 5 = excellent). Use null if the block is not_addressed. Do NOT penalize for non-native language."
+      "liveRating": "An integer from 1 to 5 reflecting the QUALITY of candidate responses in this block so far (1 = weak/concerning, 3 = acceptable, 5 = excellent). Use null if the block is not_addressed. Do NOT penalize for non-native language.",
+      "reasoning": "Por qué se asignó este liveRating/estado (1-2 frases citando lo que dijo o dejó de decir el candidato, EN ESPAÑOL)",
+      "gaps": "Qué falta específicamente para APROBAR este bloque, o qué está fallando (lista breve o 1-2 frases concretas, EN ESPAÑOL). Si está bien cubierto y aprobado, puede ir vacío/null."
     }
   },
   "suggestions": [
@@ -1811,6 +1814,12 @@ Return a strict JSON object with this structure:
           if ((update as any).liveRating !== undefined) {
             existing.liveRating = (update as any).liveRating;
           }
+          if ((update as any).reasoning !== undefined) {
+            existing.reasoning = (update as any).reasoning;
+          }
+          if ((update as any).gaps !== undefined) {
+            existing.gaps = (update as any).gaps;
+          }
         }
       } else {
         newBlockStatus[blockId] = update as any;
@@ -1856,3 +1865,81 @@ async function startServer() {
 }
 
 startServer();
+
+// --- LIVE INTERVIEW PROBE QUESTIONS ---
+app.post("/api/admin/sessions/:id/live-interview/probe-questions", liveInterviewProbeLimiter, async (req, res) => {
+  const authHeader = req.headers["x-admin-passcode"] as string | undefined;
+  if (!verifyAdminAccess(authHeader, res)) return;
+
+  const { id } = req.params;
+  const { blockId } = req.body;
+  
+  let session: any = null;
+  if (firestoreClient) {
+    const docSnap = await firestoreClient.collection("interviews").doc(id).get();
+    if (docSnap.exists) {
+      session = docSnap.data();
+    }
+  }
+  if (!session) {
+    const sessions = getLocalSessions();
+    session = sessions.find((s: any) => s.id === id);
+  }
+  if (!session) return res.status(404).json({ error: "Session not found" });
+
+  const block = session.secondInterviewGuide?.blocks?.find((b: any) => b.id === blockId);
+  if (!block) return res.status(404).json({ error: "Block not found" });
+
+  const blockStatus = session.liveInterview?.blockStatus?.[blockId] || {};
+  const transcript = session.liveInterview?.transcript || "";
+
+  try {
+    const prompt = `You are an AI assistant for a human interviewer.
+We need 2-4 specific follow-up questions to probe the candidate about the following interview block.
+
+Interview Block:
+- Title: \${block.title}
+- Goal: \${block.goal}
+- Listen For: \${JSON.stringify(block.listenFor || [])}
+- Red Flags: \${JSON.stringify(block.redFlags || [])}
+
+Current Block Status:
+- Status: \${blockStatus.status || "not_addressed"}
+- Gaps (What is missing/failing): \${JSON.stringify(blockStatus.gaps || "Unknown")}
+- Reasoning: \${blockStatus.reasoning || "Unknown"}
+
+Full Transcript so far:
+\${transcript}
+
+Task:
+Based on what the candidate has already said and the identified "gaps", generate 2-4 specific follow-up questions to investigate exactly what is missing and complete the evaluation of this block. Do not repeat what has already been answered. Do not penalize for non-native language.
+Return the questions in BOTH Spanish (es) and English (en), along with a rationale (in Spanish) for why this question helps.
+
+Return a strict JSON object:
+{
+  "questions": [
+    {
+      "es": "Question in Spanish",
+      "en": "Question in English",
+      "rationale": "Por qué esta pregunta ayuda a cerrar la brecha (en español)"
+    }
+  ]
+}`;
+
+    const response = await generateContentWithInfiniteResilience({
+      contents: prompt,
+      config: {
+        responseMimeType: "application/json",
+      }
+    });
+
+    const rawText = response?.text || "";
+    if (!rawText) throw new Error("Empty response from Gemini");
+
+    const aiResult = JSON.parse(rawText);
+    return res.json({ success: true, questions: aiResult.questions || [] });
+  } catch (error: any) {
+    console.error("Probe questions error", error);
+    return res.status(500).json({ error: "Failed to generate probe questions" });
+  }
+});
