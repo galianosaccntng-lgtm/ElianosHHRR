@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { mapLiveStateToScores } from '../patch';
 import { InterviewSession, LiveInterviewState, SecondInterviewBlock } from '../types';
-import { Mic, Square, Pause, AlertCircle, Play, CheckCircle2, Circle, Loader2 } from 'lucide-react';
+import { Mic, Square, Pause, AlertCircle, Play, CheckCircle2, Circle, Loader2, RotateCcw } from 'lucide-react';
 import { adminI18n, AdminLang } from '../i18n-admin';
 
 export function LiveInterviewPanel({ 
@@ -25,7 +25,8 @@ export function LiveInterviewPanel({
   useEffect(() => {
     setLiveState(session.liveInterview);
     liveStateRef.current = session.liveInterview;
-  }, [session.id]);
+    setHasConsent(!!session.liveInterview?.consentConfirmedAt);
+  }, [session.id, session.liveInterview]);
 
   useEffect(() => {
     if (transcriptScrollRef.current) {
@@ -275,6 +276,74 @@ export function LiveInterviewPanel({
     return `${m}:${s}`;
   };
 
+  const [isResetting, setIsResetting] = useState(false);
+
+  const handleResetInterview = async () => {
+    if (!window.confirm(t.liveInterviewResetConfirm)) {
+      return;
+    }
+
+    setIsResetting(true);
+    try {
+      // 1. Stop recording and release mic if active
+      if (cycleTimerRef.current) {
+        clearTimeout(cycleTimerRef.current);
+        cycleTimerRef.current = null;
+      }
+      if (timerRef.current) {
+        clearInterval(timerRef.current);
+        timerRef.current = null;
+      }
+      if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
+        try {
+          mediaRecorderRef.current.stop();
+        } catch (e) {
+          console.warn("Could not stop media recorder:", e);
+        }
+        mediaRecorderRef.current = null;
+      }
+      if (streamRef.current) {
+        streamRef.current.getTracks().forEach(track => track.stop());
+        streamRef.current = null;
+      }
+
+      // 2. Clear all local state
+      setIsRecording(false);
+      setIsPaused(false);
+      setTimeElapsed(0);
+      setHasConsent(false);
+      setShowConsentModal(false);
+      setProbingBlockId(null);
+      setProbingQuestions(null);
+      setProbingLoading(false);
+      setLiveState(undefined);
+      liveStateRef.current = undefined;
+
+      // 3. Clear persisted live interview on server
+      await fetch(`/api/admin/sessions/${session.id}/live-interview`, {
+        method: 'DELETE',
+        headers: {
+          'x-admin-passcode': adminToken
+        }
+      });
+
+      // 4. Update parent
+      onStateUpdate();
+    } catch (err) {
+      console.error("Error resetting live interview:", err);
+    } finally {
+      setIsResetting(false);
+    }
+  };
+
+  const hasLiveContent = isRecording || 
+    !!liveState?.transcript || 
+    !!liveState?.startedAt || 
+    !!liveState?.endedAt || 
+    !!liveState?.consentConfirmedAt || 
+    (liveState?.blockStatus && Object.keys(liveState.blockStatus).length > 0) ||
+    !!session.liveInterview;
+
   if (!guide) return null;
 
   return (
@@ -334,6 +403,18 @@ export function LiveInterviewPanel({
                 {t.liveInterviewDumpScores}
               </button>
             </div>
+          )}
+
+          {hasLiveContent && (
+            <button
+              onClick={handleResetInterview}
+              disabled={isResetting}
+              className="flex items-center gap-1.5 px-3 py-2 bg-rose-50 hover:bg-rose-100 text-rose-700 hover:text-rose-800 border border-rose-200/80 rounded-xl text-xs font-bold transition-colors shadow-xs disabled:opacity-50"
+              title={t.liveInterviewResetBtn}
+            >
+              <RotateCcw className={`w-3.5 h-3.5 ${isResetting ? 'animate-spin' : ''}`} />
+              {t.liveInterviewResetBtn}
+            </button>
           )}
         </div>
       </div>

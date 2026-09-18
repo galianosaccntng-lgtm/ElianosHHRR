@@ -5,7 +5,7 @@ import { createServer as createViteServer } from "vite";
 import { GoogleGenAI } from "@google/genai";
 import dotenv from "dotenv";
 import nodemailer from "nodemailer";
-import { Firestore } from "@google-cloud/firestore";
+import { Firestore, FieldValue } from "@google-cloud/firestore";
 import { Storage } from "@google-cloud/storage";
 import multer from "multer";
 import crypto from "crypto";
@@ -274,6 +274,8 @@ async function upsertSession(session: any): Promise<void> {
     safeSession.deletedAt = session.deletedAt;
   }
 
+  const isLiveInterviewDeleted = session.liveInterview === null;
+
   // Always keep local disk in sync as fallback
   const sessions = getLocalSessions();
   const idx = sessions.findIndex((s) => s.id === safeSession.id);
@@ -282,9 +284,15 @@ async function upsertSession(session: any): Promise<void> {
     if (safeSession.deletedAt === null) {
       delete sessions[idx].deletedAt;
     }
+    if (isLiveInterviewDeleted) {
+      delete sessions[idx].liveInterview;
+    }
   } else {
     if (safeSession.deletedAt === null) {
       delete safeSession.deletedAt;
+    }
+    if (isLiveInterviewDeleted) {
+      delete safeSession.liveInterview;
     }
     sessions.unshift(safeSession);
   }
@@ -293,6 +301,9 @@ async function upsertSession(session: any): Promise<void> {
   // Write to Cloud Firestore
   if (firestoreClient) {
     try {
+      if (isLiveInterviewDeleted) {
+        safeSession.liveInterview = FieldValue.delete();
+      }
       await firestoreClient.collection("interviews").doc(safeSession.id).set(safeSession, { merge: true });
     } catch (fsErr) {
       handleFirestoreError('Firestore write error', fsErr);
@@ -1727,6 +1738,7 @@ IMPORTANT RULES:
 2. The order of the conversation may NOT follow the guide order. Map whatever is said to the relevant block(s).
 3. The conversation may switch between English and Spanish frequently. Handle both natively.
 4. Non-native speakers using formal/broken language is NOT a red flag by itself.
+5. OUTPUT LANGUAGE — CRITICAL: Write EVERY analysis field — evidence, reasoning, gaps, suggestions.text, and languageNote — in ${langName} ONLY, no matter what language the candidate or interviewer speaks. Even if the entire interview is in Spanish, your analysis MUST be written in ${langName}. The ONLY field that keeps the original spoken language is transcriptSegment (never translate the transcript). Do not mix languages in the analysis fields.
 
 Interview Guide Blocks:
 ${JSON.stringify(session.secondInterviewGuide.blocks.map(b => ({
@@ -1845,27 +1857,21 @@ Return a strict JSON object with this structure:
     res.status(500).json({ success: false, error: error.message || "An error occurred during analysis." });
   }
 });
-async function startServer() {
-  if (process.env.NODE_ENV !== "production") {
-    const vite = await createViteServer({
-      server: { middlewareMode: true },
-      appType: "spa",
-    });
-    app.use(vite.middlewares);
-  } else {
-    const distPath = path.join(process.cwd(), "dist");
-    app.use(express.static(distPath));
-    app.get("*", (req, res) => {
-      res.sendFile(path.join(distPath, "index.html"));
-    });
-  }
 
-  app.listen(PORT, "0.0.0.0", () => {
-    console.log(`Server running on http://localhost:${PORT}`);
-  });
-}
+// Delete / reset live interview for a session
+app.delete("/api/admin/sessions/:id/live-interview", async (req, res) => {
+  const authHeader = req.headers["x-admin-passcode"] as string | undefined;
+  if (!verifyAdminAccess(authHeader, res)) return;
 
-startServer();
+  const { id } = req.params;
+  const sessions = await getStoredSessions();
+  const session = sessions.find((s) => s.id === id);
+  if (!session) return res.status(404).json({ error: "Session not found" });
+
+  session.liveInterview = null;
+  await upsertSession(session);
+  return res.json({ success: true });
+});
 
 // --- LIVE INTERVIEW PROBE QUESTIONS ---
 app.post("/api/admin/sessions/:id/live-interview/probe-questions", liveInterviewProbeLimiter, async (req, res) => {
@@ -1899,23 +1905,27 @@ app.post("/api/admin/sessions/:id/live-interview/probe-questions", liveInterview
     const prompt = `You are an AI assistant for a human interviewer.
 We need 2-4 specific follow-up questions to probe the candidate about the following interview block.
 
+IMPORTANT RULES:
+1. OUTPUT LANGUAGE — CRITICAL: Write the "rationale" field and ANY analysis text in ${langName} ONLY, no matter what language the candidate or interviewer speaks. Even if the entire conversation was in Spanish, the "rationale" MUST be in ${langName}.
+2. QUESTIONS: Provide each question in BOTH Spanish (es) and English (en).
+
 Interview Block:
-- Title: \${block.title}
-- Goal: \${block.goal}
-- Listen For: \${JSON.stringify(block.listenFor || [])}
-- Red Flags: \${JSON.stringify(block.redFlags || [])}
+- Title: ${block.title}
+- Goal: ${block.goal}
+- Listen For: ${JSON.stringify(block.listenFor || [])}
+- Red Flags: ${JSON.stringify(block.redFlags || [])}
 
 Current Block Status:
-- Status: \${blockStatus.status || "not_addressed"}
-- Gaps (What is missing/failing): \${JSON.stringify(blockStatus.gaps || "Unknown")}
-- Reasoning: \${blockStatus.reasoning || "Unknown"}
+- Status: ${blockStatus.status || "not_addressed"}
+- Gaps (What is missing/failing): ${JSON.stringify(blockStatus.gaps || "Unknown")}
+- Reasoning: ${blockStatus.reasoning || "Unknown"}
 
 Full Transcript so far:
-\${transcript}
+${transcript}
 
 Task:
 Based on what the candidate has already said and the identified "gaps", generate 2-4 specific follow-up questions to investigate exactly what is missing and complete the evaluation of this block. Do not repeat what has already been answered. Do not penalize for non-native language.
-Return the questions in BOTH Spanish (es) and English (en), along with a rationale in the UI language (${langName}) for why this question helps.
+Return the questions in BOTH Spanish (es) and English (en), along with a rationale in ${langName} for why this question helps.
 
 Return a strict JSON object:
 {
@@ -1945,3 +1955,25 @@ Return a strict JSON object:
     return res.status(500).json({ error: "Failed to generate probe questions" });
   }
 });
+
+async function startServer() {
+  if (process.env.NODE_ENV !== "production") {
+    const vite = await createViteServer({
+      server: { middlewareMode: true },
+      appType: "spa",
+    });
+    app.use(vite.middlewares);
+  } else {
+    const distPath = path.join(process.cwd(), "dist");
+    app.use(express.static(distPath));
+    app.get("*", (req, res) => {
+      res.sendFile(path.join(distPath, "index.html"));
+    });
+  }
+
+  app.listen(PORT, "0.0.0.0", () => {
+    console.log(`Server running on http://localhost:${PORT}`);
+  });
+}
+
+startServer();
