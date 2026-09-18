@@ -115,6 +115,11 @@ export interface LiveInterviewBlockEvaluation {
   notes: string;
 }
 
+export interface BestFitPosition {
+  position: 'Barista' | 'Shift Leader' | 'Store Manager';
+  reasoning: string;
+}
+
 export interface LiveInterviewFinalEvaluation {
   overallRating: number; // 1 to 5
   recommendation: 'Hire' | 'Second Interview' | 'Do Not Hire';
@@ -124,6 +129,8 @@ export interface LiveInterviewFinalEvaluation {
   narrative: string;
   generatedAt: string;
   language?: string;
+  bestFitPosition?: BestFitPosition;
+  targetPosition?: 'Barista' | 'Shift Leader' | 'Store Manager';
 }
 
 export interface LiveInterviewState {
@@ -135,6 +142,7 @@ export interface LiveInterviewState {
   suggestions: LiveInterviewSuggestion[];
   activeSuggestion?: ActiveSuggestion | null;
   finalEvaluation?: LiveInterviewFinalEvaluation | null;
+  crossPositionEvaluations?: Record<string, LiveInterviewFinalEvaluation>;
   languageNote?: string;
   updatedAt: string;
 }

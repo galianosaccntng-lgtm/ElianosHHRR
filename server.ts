@@ -89,6 +89,7 @@ const adminOnboardingLimiter = createRateLimiter(60 * 60 * 1000, 10, "Too many o
 const liveInterviewAnalyzeLimiter = createRateLimiter(60 * 60 * 1000, 400, "Too many live interview analyze requests. Please try again later (maximum 120 per hour).");
 const liveInterviewProbeLimiter = createRateLimiter(60 * 60 * 1000, 60, "Too many probe question requests. Please try again later.");
 const liveInterviewFinalEvalLimiter = createRateLimiter(60 * 60 * 1000, 20, "Too many final evaluation requests. Please try again later (maximum 20 per hour).");
+const liveInterviewCrossEvalLimiter = createRateLimiter(60 * 60 * 1000, 20, "Too many cross-position evaluation requests. Please try again later (maximum 20 per hour).");
 
 // Centralized admin authentication verification helper
 function verifyAdminAccess(provided: string | undefined, res: express.Response): boolean {
@@ -2192,6 +2193,8 @@ CRITICAL RULES & GUIDELINES:
    - 3: Meets Expectations / Acceptable
    - 4: Exceeds Expectations / Strong Candidate
    - 5: Outstanding / Exceptional Candidate
+7. BEST-FIT POSITION SUGGESTION:
+   Consider the three positions at Ellianos Coffee ("Barista" | "Shift Leader" | "Store Manager") and, based on the transcript and demonstrated capabilities, indicate which position fits the candidate best (can match or differ from applied position of "${position}") and explain why, citing evidence from the transcript in ${langName}.
 
 Return a strict JSON object with this exact structure:
 {
@@ -2214,7 +2217,11 @@ Return a strict JSON object with this exact structure:
       "notes": "1-2 concise sentences summarizing the candidate's performance on this block in ${langName}"
     }
   ],
-  "narrative": "1-2 comprehensive executive summary paragraphs in ${langName} providing an overarching assessment of the candidate, their cultural and operational fit for Ellianos Coffee, and the rationale behind the recommendation."
+  "narrative": "1-2 comprehensive executive summary paragraphs in ${langName} providing an overarching assessment of the candidate, their cultural and operational fit for Ellianos Coffee, and the rationale behind the recommendation.",
+  "bestFitPosition": {
+    "position": "Barista" | "Shift Leader" | "Store Manager",
+    "reasoning": "Clear explanation in ${langName} citing evidence from the transcript as to why this position is their optimal operational and cultural fit."
+  }
 }`;
 
     const response = await generateContentWithInfiniteResilience({
@@ -2231,6 +2238,18 @@ Return a strict JSON object with this exact structure:
 
     const cleanedText = rawText.replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/i, "").trim();
     const aiResult = JSON.parse(cleanedText);
+
+    let bestFitPosition: any = undefined;
+    if (aiResult.bestFitPosition && typeof aiResult.bestFitPosition === 'object') {
+      const validPositions = ['Barista', 'Shift Leader', 'Store Manager'];
+      const pos = validPositions.includes(aiResult.bestFitPosition.position)
+        ? aiResult.bestFitPosition.position
+        : (validPositions.includes(position) ? position : 'Barista');
+      bestFitPosition = {
+        position: pos,
+        reasoning: String(aiResult.bestFitPosition.reasoning || '')
+      };
+    }
 
     // Sanitize and validate final evaluation payload
     const finalEvaluation = {
@@ -2256,6 +2275,7 @@ Return a strict JSON object with this exact structure:
             notes: blockStatus[b.id]?.reasoning || ''
           })),
       narrative: String(aiResult.narrative || ''),
+      bestFitPosition,
       generatedAt: new Date().toISOString(),
       language: uiLanguage || 'es'
     };
@@ -2274,6 +2294,181 @@ Return a strict JSON object with this exact structure:
     return res.status(500).json({
       success: false,
       error: err.message || (uiLanguage === 'en' ? "Failed to generate final evaluation" : "Error al generar la evaluación final")
+    });
+  }
+});
+
+// Cross-position evaluation endpoint
+app.post("/api/admin/sessions/:id/live-interview/evaluate-for-position", liveInterviewCrossEvalLimiter, async (req, res) => {
+  const authHeader = req.headers["x-admin-passcode"] as string | undefined;
+  if (!verifyAdminAccess(authHeader, res)) return;
+
+  const { id } = req.params;
+  const { targetPosition, uiLanguage } = req.body || {};
+
+  const validPositions = ['Barista', 'Shift Leader', 'Store Manager'];
+  if (!targetPosition || !validPositions.includes(targetPosition)) {
+    return res.status(400).json({
+      success: false,
+      error: uiLanguage === 'en'
+        ? "Invalid target position. Must be Barista, Shift Leader, or Store Manager."
+        : "Posición inválida. Debe ser Barista, Shift Leader o Store Manager."
+    });
+  }
+
+  const langName = uiLanguage === 'en' ? 'English' : 'Spanish';
+
+  try {
+    let session: any = null;
+    if (firestoreClient) {
+      try {
+        const docSnap = await firestoreClient.collection("interviews").doc(id).get();
+        if (docSnap.exists) {
+          session = docSnap.data();
+        }
+      } catch (fsErr) {
+        handleFirestoreError('Cross-position evaluation Firestore error', fsErr);
+      }
+    }
+    if (!session) {
+      const sessions = getLocalSessions();
+      session = sessions.find((s: any) => s.id === id);
+    }
+    if (!session) {
+      return res.status(404).json({
+        success: false,
+        error: uiLanguage === 'en' ? "Session not found" : "Sesión no encontrada"
+      });
+    }
+
+    const transcript = session.liveInterview?.transcript?.trim();
+    if (!transcript) {
+      return res.status(400).json({
+        success: false,
+        error: uiLanguage === 'en'
+          ? "No interview transcript found. A conversation must be recorded before evaluating."
+          : "No se encontró transcripción de la entrevista. Se requiere haber grabado conversación para evaluar."
+      });
+    }
+
+    const candidateName = session.candidateInfo?.name || "Candidate";
+    const appliedPosition = session.position || "Barista";
+
+    let targetRoleProfile = "";
+    if (targetPosition === 'Barista') {
+      targetRoleProfile = `
+ROLE PROFILE: BARISTA (Drive-thru speed, beverage craft, customer connection)
+- Core demands: high energy, positive attitude, multitasking in fast-paced drive-thru windows, espresso/smoothie speed, coachability, physical stamina, friendly guest hospitality.
+- Evaluation focus: Can they thrive under peak speed, follow drink quality recipes, keep clean workstations, and deliver warm guest hospitality under pressure?`;
+    } else if (targetPosition === 'Shift Leader') {
+      targetRoleProfile = `
+ROLE PROFILE: SHIFT LEADER (Floor leadership, speed of service, cash and shift control)
+- Core demands: active shift leadership, coaching baristas in real-time, resolving customer & order hiccups calmly, opening/closing procedures, cash drawer management, maintaining drive-thru timer standards.
+- Evaluation focus: Do they exhibit maturity, proactive problem solving, ability to direct and support teammates without panic, and reliability with keys/cash?`;
+    } else {
+      targetRoleProfile = `
+ROLE PROFILE: STORE MANAGER (Full P&L, store operations, staffing, inventory & culture)
+- Core demands: end-to-end kiosk ownership, managing labor cost and schedules, food/dairy inventory & waste control, hiring, training, brand compliance, and driving guest loyalty & sales growth.
+- Evaluation focus: Do they demonstrate business acumen, accountability, team development capability, operational discipline, and long-term commitment to Ellianos standards?`;
+    }
+
+    const prompt = `You are the Senior Talent & Operations Director at Ellianos Coffee (Lehigh Acres, FL drive-thru kiosk franchise).
+Conduct a CROSS-POSITION EVALUATION of this candidate specifically for the role of "${targetPosition}".
+The candidate originally applied for "${appliedPosition}". You are evaluating their suitability and readiness IF HIRED AS A "${targetPosition}".
+
+CANDIDATE & ROLES:
+- Candidate Name: ${candidateName}
+- Originally Applied Position: ${appliedPosition}
+- TARGET EVALUATED POSITION: ${targetPosition}
+
+${targetRoleProfile}
+
+FULL LIVE INTERVIEW TRANSCRIPT:
+${transcript}
+
+CRITICAL RULES & GUIDELINES:
+1. OUTPUT LANGUAGE — ABSOLUTE MANDATE:
+   Write EVERY SINGLE text field (strengths, concerns, narrative) in ${langName} ONLY.
+   Even if parts of the transcript or the entire interview were spoken in the other language, your evaluation analysis MUST be written in ${langName}.
+2. HUMAN ASSISTANCE NOTICE:
+   This evaluation is an ASSISTANCE tool for human hiring decision-makers. It is NOT an automatic binding verdict.
+3. LANGUAGE FAIRNESS:
+   NEVER penalize the candidate simply for being a non-native speaker, speaking broken English, having an accent, or speaking Spanish. Evaluate strictly on their demonstrated competencies, attitude, reliability, and readiness for "${targetPosition}".
+4. EVIDENCE-BASED:
+   Base all strengths, concerns, and overall verdict directly on concrete statements or actions from the transcript.
+5. RECOMMENDATION FOR THIS TARGET ROLE:
+   Strictly one of: "Hire" | "Second Interview" | "Do Not Hire".
+   - "Hire": Strong fit for ${targetPosition}, demonstrating the necessary skills, attitude, and maturity.
+   - "Second Interview": Potential fit, but with specific reservations or needs a follow-up conversation tailored to ${targetPosition}.
+   - "Do Not Hire": Poor fit for ${targetPosition} (e.g. lacks required maturity, leadership for management, or pace/availability for barista).
+6. OVERALL RATING FOR THIS TARGET ROLE:
+   An integer from 1 to 5:
+   - 1: Deficient / Unsuited for ${targetPosition}
+   - 2: Below Expectations / High Risk for ${targetPosition}
+   - 3: Meets Expectations / Feasible for ${targetPosition}
+   - 4: Exceeds Expectations / Strong Fit for ${targetPosition}
+   - 5: Outstanding / Exceptional Fit for ${targetPosition}
+
+Return a strict JSON object with this exact structure:
+{
+  "overallRating": 1 | 2 | 3 | 4 | 5,
+  "recommendation": "Hire" | "Second Interview" | "Do Not Hire",
+  "strengths": [
+    "Concrete strength citing specific transcript evidence in ${langName} relevant to ${targetPosition}",
+    "..."
+  ],
+  "concerns": [
+    "Concrete concern or risk area citing evidence or gaps from transcript in ${langName} relevant to ${targetPosition}",
+    "..."
+  ],
+  "narrative": "1-2 comprehensive paragraphs in ${langName} assessing how well this candidate would perform specifically as a ${targetPosition} at Ellianos Coffee compared to their applied role of ${appliedPosition}, explaining the rationale."
+}`;
+
+    const response = await generateContentWithInfiniteResilience({
+      contents: prompt,
+      config: {
+        responseMimeType: "application/json",
+        temperature: 0.2,
+      },
+      timeoutMs: 40000,
+    });
+
+    const rawText = response?.text || "";
+    if (!rawText) throw new Error("Empty response from Gemini");
+
+    const cleanedText = rawText.replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/i, "").trim();
+    const aiResult = JSON.parse(cleanedText);
+
+    const evaluation = {
+      targetPosition,
+      overallRating: Math.max(1, Math.min(5, Math.round(Number(aiResult.overallRating) || 3))),
+      recommendation: (['Hire', 'Second Interview', 'Do Not Hire'].includes(aiResult.recommendation)
+        ? aiResult.recommendation
+        : 'Second Interview'),
+      strengths: Array.isArray(aiResult.strengths) ? aiResult.strengths.map(String) : [],
+      concerns: Array.isArray(aiResult.concerns) ? aiResult.concerns.map(String) : [],
+      blockSummary: [],
+      narrative: String(aiResult.narrative || ''),
+      generatedAt: new Date().toISOString(),
+      language: uiLanguage || 'es'
+    };
+
+    session.liveInterview = {
+      ...(session.liveInterview || { blockStatus: {}, suggestions: [], transcript: '' }),
+      crossPositionEvaluations: {
+        ...(session.liveInterview?.crossPositionEvaluations || {}),
+        [targetPosition]: evaluation
+      },
+      updatedAt: new Date().toISOString()
+    };
+
+    await upsertSession(session);
+    return res.json({ success: true, evaluation });
+  } catch (err: any) {
+    console.error("[LiveInterviewCrossEval] Error evaluating for position:", err);
+    return res.status(500).json({
+      success: false,
+      error: err.message || (uiLanguage === 'en' ? "Failed to evaluate for target position" : "Error al evaluar para la posición objetivo")
     });
   }
 });

@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { mapLiveStateToScores } from '../patch';
 import { InterviewSession, LiveInterviewState, SecondInterviewBlock, LiveInterviewFinalEvaluation } from '../types';
-import { Mic, Square, Pause, AlertCircle, Play, CheckCircle2, Circle, Loader2, RotateCcw, Sparkles, Copy, Check, Printer, AlertTriangle, XCircle, Star } from 'lucide-react';
+import { Mic, Square, Pause, AlertCircle, Play, CheckCircle2, Circle, Loader2, RotateCcw, Sparkles, Copy, Check, Printer, AlertTriangle, XCircle, Star, Briefcase } from 'lucide-react';
 import { adminI18n, AdminLang } from '../i18n-admin';
 
 function escapeHtml(str: string): string {
@@ -14,11 +14,17 @@ function escapeHtml(str: string): string {
 }
 
 function formatFinalEvaluationAsText(evalData: LiveInterviewFinalEvaluation, candidateName: string, position: string, t: any): string {
-  let text = `=== ${t.liveFinalEvalTitle.toUpperCase()} ===\n`;
-  text += `${candidateName} — ${position}\n`;
+  const isCross = !!evalData.targetPosition;
+  let text = `=== ${isCross ? `${t.liveCrossEvalSectionTitle.toUpperCase()} (${evalData.targetPosition})` : t.liveFinalEvalTitle.toUpperCase()} ===\n`;
+  text += `${candidateName} — ${isCross ? `${evalData.targetPosition} (${t.liveCrossEvalAppliedRoleBadge}: ${position})` : position}\n`;
   text += `${t.liveFinalEvalGeneratedAt}: ${new Date(evalData.generatedAt).toLocaleString()}\n\n`;
   text += `* ${t.liveFinalEvalOverallScore}: ${evalData.overallRating} / 5\n`;
   text += `* ${t.liveFinalEvalRecommendation}: ${evalData.recommendation.toUpperCase()}\n\n`;
+
+  if (evalData.bestFitPosition) {
+    text += `* ${t.liveBestFitTitle.toUpperCase()}: ${evalData.bestFitPosition.position}\n`;
+    text += `  ${t.liveBestFitReasoning}: ${evalData.bestFitPosition.reasoning}\n\n`;
+  }
 
   text += `--- ${t.liveFinalEvalNarrative.toUpperCase()} ---\n`;
   text += `${evalData.narrative}\n\n`;
@@ -31,13 +37,15 @@ function formatFinalEvaluationAsText(evalData: LiveInterviewFinalEvaluation, can
   evalData.concerns.forEach((c) => { text += `• ${c}\n`; });
   text += `\n`;
 
-  text += `--- ${t.liveFinalEvalBlockBreakdown.toUpperCase()} ---\n`;
-  evalData.blockSummary.forEach((b) => {
-    const status = b.passed ? t.liveFinalEvalPassedBadge : t.liveFinalEvalNotPassedBadge;
-    const rating = b.rating ? `${b.rating}/5` : '—';
-    text += `[${status}] ${b.title} (${rating}): ${b.notes}\n`;
-  });
-  text += `\n`;
+  if (evalData.blockSummary && evalData.blockSummary.length > 0) {
+    text += `--- ${t.liveFinalEvalBlockBreakdown.toUpperCase()} ---\n`;
+    evalData.blockSummary.forEach((b) => {
+      const status = b.passed ? t.liveFinalEvalPassedBadge : t.liveFinalEvalNotPassedBadge;
+      const rating = b.rating ? `${b.rating}/5` : '—';
+      text += `[${status}] ${b.title} (${rating}): ${b.notes}\n`;
+    });
+    text += `\n`;
+  }
 
   text += `[${t.liveFinalEvalDisclaimer}]\n`;
   return text;
@@ -55,12 +63,14 @@ function generatePrintableFinalEvaluationHtml(
     'Do Not Hire': { bg: '#fff1f2', text: '#9f1239', border: '#fecdd3' }
   };
   const color = recColors[evalData.recommendation] || recColors['Second Interview'];
+  const isCross = !!evalData.targetPosition;
+  const title = isCross ? `${t.liveCrossEvalSectionTitle} (${evalData.targetPosition})` : t.liveFinalEvalTitle;
 
   return `<!DOCTYPE html>
 <html>
 <head>
   <meta charset="utf-8">
-  <title>${escapeHtml(t.liveFinalEvalTitle)} - ${escapeHtml(candidateName)}</title>
+  <title>${escapeHtml(title)} - ${escapeHtml(candidateName)}</title>
   <style>
     @media print {
       body { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
@@ -101,6 +111,13 @@ function generatePrintableFinalEvaluationHtml(
       border-radius: 10px;
       font-weight: 700;
       font-size: 14px;
+    }
+    .best-fit-box {
+      background: #f5f3ff;
+      border: 1px solid #c4b5fd;
+      padding: 12px 16px;
+      border-radius: 10px;
+      margin-bottom: 16px;
     }
     h2 {
       font-size: 14px;
@@ -148,9 +165,9 @@ function generatePrintableFinalEvaluationHtml(
 <body>
   <div class="header">
     <div class="brand">Ellianos Coffee — Lehigh Acres, FL</div>
-    <h1>${escapeHtml(t.liveFinalEvalTitle)}</h1>
+    <h1>${escapeHtml(title)}</h1>
     <div class="meta">
-      <strong>${escapeHtml(candidateName)}</strong> · ${escapeHtml(position)} · ${escapeHtml(t.liveFinalEvalGeneratedAt)}: ${new Date(evalData.generatedAt).toLocaleString()}
+      <strong>${escapeHtml(candidateName)}</strong> · ${isCross ? `Evaluado para: <strong>${escapeHtml(evalData.targetPosition || '')}</strong> (${escapeHtml(t.liveCrossEvalAppliedRoleBadge)}: ${escapeHtml(position)})` : escapeHtml(position)} · ${escapeHtml(t.liveFinalEvalGeneratedAt)}: ${new Date(evalData.generatedAt).toLocaleString()}
     </div>
   </div>
 
@@ -158,6 +175,12 @@ function generatePrintableFinalEvaluationHtml(
     <div class="rec-box">${escapeHtml(t.liveFinalEvalRecommendation)}: ${escapeHtml(evalData.recommendation)}</div>
     <div class="score-box">${escapeHtml(t.liveFinalEvalOverallScore)}: ${evalData.overallRating} / 5</div>
   </div>
+
+  ${evalData.bestFitPosition ? `
+  <div class="best-fit-box">
+    <strong style="color:#5b21b6;">${escapeHtml(t.liveBestFitTitle)}: ${escapeHtml(evalData.bestFitPosition.position)}</strong>
+    <div style="font-size:12px;color:#4c1d95;margin-top:4px;">${escapeHtml(evalData.bestFitPosition.reasoning)}</div>
+  </div>` : ''}
 
   <h2>${escapeHtml(t.liveFinalEvalNarrative)}</h2>
   <div class="narrative">${escapeHtml(evalData.narrative)}</div>
@@ -172,6 +195,7 @@ function generatePrintableFinalEvaluationHtml(
     ${evalData.concerns.map(c => `<li>${escapeHtml(c)}</li>`).join('')}
   </ul>
 
+  ${evalData.blockSummary && evalData.blockSummary.length > 0 ? `
   <h2>${escapeHtml(t.liveFinalEvalBlockBreakdown)}</h2>
   <table class="block-table">
     <thead>
@@ -192,7 +216,7 @@ function generatePrintableFinalEvaluationHtml(
         </tr>
       `).join('')}
     </tbody>
-  </table>
+  </table>` : ''}
 
   <div class="disclaimer">${escapeHtml(t.liveFinalEvalDisclaimer)}</div>
 </body>
@@ -226,6 +250,11 @@ export function LiveInterviewPanel({
   const [isGeneratingFinalEval, setIsGeneratingFinalEval] = useState(false);
   const [copiedFinalEval, setCopiedFinalEval] = useState(false);
   const [finalEvalError, setFinalEvalError] = useState<string | null>(null);
+
+  const [evaluatingPosition, setEvaluatingPosition] = useState<string | null>(null);
+  const [copiedCrossEval, setCopiedCrossEval] = useState<string | null>(null);
+  const [crossEvalError, setCrossEvalError] = useState<string | null>(null);
+  const [activeCrossTab, setActiveCrossTab] = useState<string | null>(null);
 
   const handleGenerateFinalEvaluation = async () => {
     const transcriptText = liveState?.transcript?.trim();
@@ -290,6 +319,81 @@ export function LiveInterviewPanel({
     const candidateName = session.candidateInfo?.name || t.unnamedApplicant || 'Candidate';
     const candidatePosition = session.position || 'Barista';
     const htmlContent = generatePrintableFinalEvaluationHtml(liveState.finalEvaluation, candidateName, candidatePosition, t);
+
+    const printWindow = window.open('', '_blank');
+    if (printWindow) {
+      printWindow.document.open();
+      printWindow.document.write(htmlContent);
+      printWindow.document.close();
+      printWindow.focus();
+      setTimeout(() => {
+        printWindow.print();
+      }, 350);
+    }
+  };
+
+  const handleEvaluateForPosition = async (targetPosition: 'Barista' | 'Shift Leader' | 'Store Manager') => {
+    const transcriptText = liveState?.transcript?.trim();
+    if (!transcriptText) {
+      alert(t.liveFinalEvalNoTranscriptAlert);
+      return;
+    }
+
+    setEvaluatingPosition(targetPosition);
+    setCrossEvalError(null);
+
+    try {
+      const res = await fetch(`/api/admin/sessions/${session.id}/live-interview/evaluate-for-position`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-admin-passcode': adminToken
+        },
+        body: JSON.stringify({ targetPosition, uiLanguage: lang })
+      });
+
+      const data = await res.json();
+      if (!res.ok || !data.success) {
+        throw new Error(data.error || t.liveCrossEvalError);
+      }
+
+      if (data.evaluation) {
+        const updatedLiveState = {
+          ...(liveStateRef.current || { blockStatus: {}, suggestions: [], transcript: '' }),
+          crossPositionEvaluations: {
+            ...(liveStateRef.current?.crossPositionEvaluations || {}),
+            [targetPosition]: data.evaluation
+          },
+          updatedAt: new Date().toISOString()
+        };
+        setLiveState(updatedLiveState);
+        liveStateRef.current = updatedLiveState;
+        setActiveCrossTab(targetPosition);
+        onStateUpdate();
+      }
+    } catch (err: any) {
+      console.error("Error evaluating for position:", err);
+      setCrossEvalError(err.message || t.liveCrossEvalError);
+    } finally {
+      setEvaluatingPosition(null);
+    }
+  };
+
+  const handleCopyCrossEvaluation = (pos: string) => {
+    const crossEval = liveState?.crossPositionEvaluations?.[pos];
+    if (!crossEval) return;
+    const candidateName = session.candidateInfo?.name || t.unnamedApplicant || 'Candidate';
+    const text = formatFinalEvaluationAsText(crossEval, candidateName, session.position || 'Barista', t);
+    navigator.clipboard.writeText(text);
+    setCopiedCrossEval(pos);
+    setTimeout(() => setCopiedCrossEval(null), 2000);
+  };
+
+  const handlePrintCrossEvaluation = (pos: string) => {
+    const crossEval = liveState?.crossPositionEvaluations?.[pos];
+    if (!crossEval) return;
+    const candidateName = session.candidateInfo?.name || t.unnamedApplicant || 'Candidate';
+    const htmlContent = generatePrintableFinalEvaluationHtml(crossEval, candidateName, session.position || 'Barista', t);
 
     const printWindow = window.open('', '_blank');
     if (printWindow) {
@@ -1185,6 +1289,60 @@ export function LiveInterviewPanel({
             })()}
           </div>
 
+          {/* Best-Fit Position Suggestion Banner */}
+          {liveState.finalEvaluation.bestFitPosition && (
+            <div className="mb-6 p-5 rounded-2xl bg-gradient-to-r from-purple-50 via-indigo-50/70 to-blue-50 border-2 border-purple-200 shadow-xs">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-2.5">
+                <div className="flex items-center gap-2.5 flex-wrap">
+                  <span className="p-1.5 bg-purple-600 text-white rounded-lg shadow-xs">
+                    <Sparkles className="w-4 h-4" />
+                  </span>
+                  <span className="text-xs font-bold uppercase tracking-wider text-purple-900">
+                    {t.liveBestFitTitle}:
+                  </span>
+                  <span className="px-3 py-1 rounded-full text-xs font-black bg-purple-600 text-white shadow-xs">
+                    {liveState.finalEvaluation.bestFitPosition.position}
+                  </span>
+                  {liveState.finalEvaluation.bestFitPosition.position === session.position ? (
+                    <span className="text-[11px] font-bold text-emerald-700 bg-emerald-100/80 px-2.5 py-0.5 rounded-md border border-emerald-200">
+                      {lang === 'en' ? 'Matches applied position' : 'Coincide con el puesto aplicado'}
+                    </span>
+                  ) : (
+                    <span className="text-[11px] font-bold text-indigo-700 bg-indigo-100/80 px-2.5 py-0.5 rounded-md border border-indigo-200">
+                      {lang === 'en' ? `Differs from applied role (${session.position})` : `Difiere del puesto aplicado (${session.position})`}
+                    </span>
+                  )}
+                </div>
+
+                {/* Quick evaluate button if differs and not yet evaluated */}
+                {liveState.finalEvaluation.bestFitPosition.position !== session.position && (
+                  <button
+                    type="button"
+                    onClick={() => handleEvaluateForPosition(liveState.finalEvaluation!.bestFitPosition!.position)}
+                    disabled={evaluatingPosition === liveState.finalEvaluation.bestFitPosition.position}
+                    className="self-start sm:self-auto flex items-center gap-1.5 px-3 py-1.5 bg-purple-600 hover:bg-purple-700 text-white rounded-xl text-xs font-bold transition-all shadow-xs disabled:opacity-50 cursor-pointer"
+                  >
+                    {evaluatingPosition === liveState.finalEvaluation.bestFitPosition.position ? (
+                      <>
+                        <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                        <span>{t.liveCrossEvalEvaluating}</span>
+                      </>
+                    ) : (
+                      <>
+                        <Sparkles className="w-3.5 h-3.5" />
+                        <span>{t.liveCrossEvalBtn(liveState.finalEvaluation.bestFitPosition.position)}</span>
+                      </>
+                    )}
+                  </button>
+                )}
+              </div>
+              <div className="text-xs text-purple-950 font-medium leading-relaxed bg-white/70 p-3 rounded-xl border border-purple-100">
+                <strong className="text-purple-900 block mb-1">{t.liveBestFitReasoning}:</strong>
+                {liveState.finalEvaluation.bestFitPosition.reasoning}
+              </div>
+            </div>
+          )}
+
           {/* Narrative / Executive Summary */}
           {liveState.finalEvaluation.narrative && (
             <div className="mb-6 p-5 rounded-2xl bg-white border border-slate-200 shadow-xs">
@@ -1286,6 +1444,296 @@ export function LiveInterviewPanel({
             <AlertCircle className="w-4 h-4 shrink-0 text-slate-400" />
             <span>{t.liveFinalEvalDisclaimer}</span>
           </div>
+        </div>
+      )}
+
+      {/* Cross-Position Evaluations Section */}
+      {hasTranscript && (
+        <div className="mt-8 bg-white border-2 border-indigo-200 rounded-3xl p-6 md:p-8 shadow-sm relative z-10">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-4 border-b border-indigo-100 mb-6">
+            <div>
+              <div className="flex items-center gap-2 mb-1">
+                <span className="p-1.5 bg-indigo-100 text-indigo-700 rounded-lg">
+                  <Briefcase className="w-4 h-4" />
+                </span>
+                <h4 className="text-lg font-serif font-bold text-slate-900">
+                  {t.liveCrossEvalSectionTitle}
+                </h4>
+              </div>
+              <p className="text-xs text-slate-600">
+                {t.liveCrossEvalSubtitle}
+              </p>
+            </div>
+            <div className="flex items-center gap-1.5 text-xs text-slate-500 font-medium bg-slate-50 px-3 py-1.5 rounded-xl border border-slate-200">
+              <span className="font-bold text-slate-700">{t.liveCrossEvalAppliedRoleBadge}:</span>
+              <span className="text-indigo-600 font-bold">{session.position || 'Barista'}</span>
+            </div>
+          </div>
+
+          {/* Target Position Action Buttons */}
+          <div className="flex items-center gap-2.5 flex-wrap mb-6">
+            {(['Barista', 'Shift Leader', 'Store Manager'] as const)
+              .filter((pos) => pos !== session.position)
+              .map((pos) => {
+                const isDone = !!liveState?.crossPositionEvaluations?.[pos];
+                const isCurrentEvaluating = evaluatingPosition === pos;
+                const isSelected = activeCrossTab === pos || (!activeCrossTab && Object.keys(liveState?.crossPositionEvaluations || {})[0] === pos);
+
+                return (
+                  <button
+                    key={pos}
+                    type="button"
+                    onClick={() => {
+                      if (isDone) {
+                        setActiveCrossTab(pos);
+                      } else {
+                        handleEvaluateForPosition(pos);
+                      }
+                    }}
+                    disabled={isCurrentEvaluating}
+                    className={`flex items-center gap-2 px-4 py-2.5 rounded-xl text-xs font-bold transition-all shadow-xs cursor-pointer ${
+                      isDone
+                        ? (isSelected
+                            ? 'bg-indigo-600 text-white ring-2 ring-indigo-600 ring-offset-2'
+                            : 'bg-indigo-50 hover:bg-indigo-100 text-indigo-800 border border-indigo-200')
+                        : 'bg-white hover:bg-purple-50 text-purple-700 border border-purple-200'
+                    } disabled:opacity-50`}
+                  >
+                    {isCurrentEvaluating ? (
+                      <>
+                        <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                        <span>{t.liveCrossEvalEvaluating}</span>
+                      </>
+                    ) : isDone ? (
+                      <>
+                        <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" />
+                        <span>{pos}</span>
+                        <span className="text-[10px] opacity-80 font-normal">({lang === 'en' ? 'Evaluated' : 'Evaluado'})</span>
+                      </>
+                    ) : (
+                      <>
+                        <Sparkles className="w-3.5 h-3.5 text-purple-600" />
+                        <span>{t.liveCrossEvalBtn(pos)}</span>
+                      </>
+                    )}
+                  </button>
+                );
+              })}
+          </div>
+
+          {/* Cross-eval error message */}
+          {crossEvalError && (
+            <div className="mb-6 p-4 rounded-xl bg-rose-50 border border-rose-200 text-rose-800 text-xs flex items-center justify-between gap-2">
+              <div className="flex items-center gap-2">
+                <AlertCircle className="w-4 h-4 text-rose-600 shrink-0" />
+                <span>{crossEvalError}</span>
+              </div>
+              <button
+                type="button"
+                onClick={() => setCrossEvalError(null)}
+                className="text-rose-600 hover:text-rose-800 text-xs font-bold cursor-pointer"
+              >
+                ✕
+              </button>
+            </div>
+          )}
+
+          {/* Display Active Cross-Position Evaluation */}
+          {(() => {
+            const keys = Object.keys(liveState?.crossPositionEvaluations || {});
+            const activeEvalPos = (activeCrossTab && liveState?.crossPositionEvaluations?.[activeCrossTab])
+              ? activeCrossTab
+              : (keys.length > 0 ? keys[0] : null);
+
+            const crossEval = activeEvalPos ? liveState?.crossPositionEvaluations?.[activeEvalPos] : null;
+
+            if (!crossEval) {
+              return (
+                <div className="p-6 rounded-2xl bg-slate-50 border border-dashed border-slate-200 text-center text-xs text-slate-500">
+                  {lang === 'en' 
+                    ? 'Select a role above to generate an evaluation for another position using the interview transcript.'
+                    : 'Selecciona un puesto arriba para generar una evaluación para otra posición utilizando la transcripción de la entrevista.'}
+                </div>
+              );
+            }
+
+            const rec = crossEval.recommendation;
+            let recBg = 'bg-slate-50 text-slate-800 border-slate-200';
+            let recIcon = <CheckCircle2 className="w-6 h-6 text-slate-600" />;
+
+            if (rec === 'Hire') {
+              recBg = 'bg-emerald-50 text-emerald-900 border-emerald-300';
+              recIcon = <CheckCircle2 className="w-6 h-6 text-emerald-600" />;
+            } else if (rec === 'Second Interview') {
+              recBg = 'bg-amber-50 text-amber-900 border-amber-300';
+              recIcon = <AlertCircle className="w-6 h-6 text-amber-600" />;
+            } else if (rec === 'Do Not Hire') {
+              recBg = 'bg-rose-50 text-rose-900 border-rose-300';
+              recIcon = <XCircle className="w-6 h-6 text-rose-600" />;
+            }
+
+            return (
+              <div className="p-6 rounded-2xl bg-slate-50/80 border border-indigo-100 animate-in fade-in duration-200">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-4 border-b border-slate-200/80 mb-5">
+                  <div>
+                    <div className="flex items-center gap-2">
+                      <span className="text-xs font-extrabold uppercase tracking-wider px-2.5 py-0.5 rounded-md bg-indigo-100 text-indigo-800">
+                        {t.liveCrossEvalEvaluatedBadge}
+                      </span>
+                      <h5 className="text-base font-bold text-slate-900">
+                        {activeEvalPos}
+                      </h5>
+                    </div>
+                    <span className="text-[11px] text-slate-500 font-medium">
+                      {t.liveFinalEvalGeneratedAt} {new Date(crossEval.generatedAt).toLocaleString()}
+                    </span>
+                  </div>
+
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <button
+                      type="button"
+                      onClick={() => handleCopyCrossEvaluation(activeEvalPos)}
+                      className="flex items-center gap-1.5 px-3 py-1.5 bg-white hover:bg-slate-100 text-slate-700 border border-slate-200 rounded-xl text-xs font-bold transition-colors shadow-xs cursor-pointer"
+                      title={t.liveFinalEvalCopyBtn}
+                    >
+                      {copiedCrossEval === activeEvalPos ? (
+                        <>
+                          <Check className="w-3.5 h-3.5 text-emerald-600" />
+                          <span className="text-emerald-700">{t.liveFinalEvalCopied}</span>
+                        </>
+                      ) : (
+                        <>
+                          <Copy className="w-3.5 h-3.5 text-slate-500" />
+                          <span>{t.liveFinalEvalCopyBtn}</span>
+                        </>
+                      )}
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => handlePrintCrossEvaluation(activeEvalPos)}
+                      className="flex items-center gap-1.5 px-3 py-1.5 bg-white hover:bg-slate-100 text-slate-700 border border-slate-200 rounded-xl text-xs font-bold transition-colors shadow-xs cursor-pointer"
+                      title={t.liveFinalEvalPrintBtn}
+                    >
+                      <Printer className="w-3.5 h-3.5 text-slate-500" />
+                      <span>{t.liveFinalEvalPrintBtn}</span>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => handleEvaluateForPosition(activeEvalPos as any)}
+                      disabled={evaluatingPosition === activeEvalPos}
+                      className="flex items-center gap-1.5 px-3 py-1.5 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border border-indigo-200 rounded-xl text-xs font-bold transition-colors shadow-xs disabled:opacity-50 cursor-pointer"
+                      title={t.liveFinalEvalRegenerateBtn}
+                    >
+                      <RotateCcw className="w-3.5 h-3.5" />
+                      <span>{t.liveFinalEvalRegenerateBtn}</span>
+                    </button>
+                  </div>
+                </div>
+
+                {/* Metrics */}
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-5">
+                  {/* Rating */}
+                  <div className="bg-white p-4 rounded-xl border border-slate-200 flex items-center justify-between">
+                    <div>
+                      <span className="text-[11px] font-bold uppercase tracking-wider text-slate-500 block mb-1">
+                        {t.liveFinalEvalOverallScore} ({activeEvalPos})
+                      </span>
+                      <div className="flex items-baseline gap-2">
+                        <span className="text-2xl font-black text-slate-900 leading-none">
+                          {crossEval.overallRating}
+                        </span>
+                        <span className="text-xs font-bold text-slate-400">/ 5</span>
+                      </div>
+                    </div>
+                    <div className="flex gap-1">
+                      {[1, 2, 3, 4, 5].map((star) => (
+                        <Star
+                          key={star}
+                          className={`w-4 h-4 ${
+                            star <= crossEval.overallRating
+                              ? 'text-amber-400 fill-amber-400'
+                              : 'text-slate-200 fill-slate-100'
+                          }`}
+                        />
+                      ))}
+                    </div>
+                  </div>
+
+                  {/* Recommendation */}
+                  <div className={`p-4 rounded-xl border flex items-center justify-between ${recBg}`}>
+                    <div>
+                      <span className="text-[11px] font-bold uppercase tracking-wider opacity-75 block mb-1">
+                        {t.liveFinalEvalRecommendation} ({activeEvalPos})
+                      </span>
+                      <span className="text-lg font-bold tracking-tight">
+                        {rec === 'Hire'
+                          ? (lang === 'en' ? 'Hire' : 'Contratar')
+                          : rec === 'Second Interview'
+                            ? (lang === 'en' ? 'Second Interview' : 'Segunda Conversación')
+                            : (lang === 'en' ? 'Do Not Hire' : 'No Contratar')}
+                      </span>
+                    </div>
+                    <div>{recIcon}</div>
+                  </div>
+                </div>
+
+                {/* Narrative */}
+                {crossEval.narrative && (
+                  <div className="mb-5 p-4 rounded-xl bg-white border border-slate-200">
+                    <h6 className="text-[11px] font-bold uppercase tracking-wider text-slate-500 mb-1.5">
+                      {t.liveFinalEvalNarrative}
+                    </h6>
+                    <p className="text-xs text-slate-800 leading-relaxed font-normal whitespace-pre-line">
+                      {crossEval.narrative}
+                    </p>
+                  </div>
+                )}
+
+                {/* Strengths & Concerns */}
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div className="p-4 rounded-xl bg-emerald-50/60 border border-emerald-200">
+                    <h6 className="text-[11px] font-bold uppercase tracking-wider text-emerald-900 flex items-center gap-1.5 mb-2.5">
+                      <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
+                      <span>{t.liveFinalEvalStrengths}</span>
+                    </h6>
+                    {crossEval.strengths.length > 0 ? (
+                      <ul className="space-y-1.5">
+                        {crossEval.strengths.map((st, idx) => (
+                          <li key={idx} className="text-xs text-emerald-950 flex items-start gap-2 leading-relaxed">
+                            <span className="w-1.5 h-1.5 rounded-full bg-emerald-600 shrink-0 mt-1.5"></span>
+                            <span>{st}</span>
+                          </li>
+                        ))}
+                      </ul>
+                    ) : (
+                      <p className="text-xs text-slate-400 italic">—</p>
+                    )}
+                  </div>
+
+                  <div className="p-4 rounded-xl bg-amber-50/60 border border-amber-200">
+                    <h6 className="text-[11px] font-bold uppercase tracking-wider text-amber-900 flex items-center gap-1.5 mb-2.5">
+                      <AlertTriangle className="w-3.5 h-3.5 text-amber-600" />
+                      <span>{t.liveFinalEvalConcerns}</span>
+                    </h6>
+                    {crossEval.concerns.length > 0 ? (
+                      <ul className="space-y-1.5">
+                        {crossEval.concerns.map((co, idx) => (
+                          <li key={idx} className="text-xs text-amber-950 flex items-start gap-2 leading-relaxed">
+                            <span className="w-1.5 h-1.5 rounded-full bg-amber-600 shrink-0 mt-1.5"></span>
+                            <span>{co}</span>
+                          </li>
+                        ))}
+                      </ul>
+                    ) : (
+                      <p className="text-xs text-slate-400 italic">—</p>
+                    )}
+                  </div>
+                </div>
+              </div>
+            );
+          })()}
         </div>
       )}
 
