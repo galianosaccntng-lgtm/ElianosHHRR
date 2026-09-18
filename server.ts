@@ -1697,7 +1697,7 @@ app.post("/api/admin/sessions/:id/live-interview/analyze", liveInterviewAnalyzeL
   if (!verifyAdminAccess(authHeader, res)) return;
 
   const { id } = req.params;
-  const { audioData, mimeType, accumulatedTranscript, accumulatedBlockStatus, consentConfirmedAt, isFinal, uiLanguage } = req.body;
+  const { audioData, mimeType, accumulatedTranscript, accumulatedBlockStatus, activeSuggestion, consentConfirmedAt, isFinal, uiLanguage } = req.body;
   const langName = uiLanguage === 'en' ? 'English' : 'Spanish';
   
   const sessions = await getStoredSessions();
@@ -1715,6 +1715,7 @@ app.post("/api/admin/sessions/:id/live-interview/analyze", liveInterviewAnalyzeL
       consentConfirmedAt: consentConfirmedAt || session.liveInterview?.consentConfirmedAt,
       transcript: accumulatedTranscript !== undefined ? accumulatedTranscript : (session.liveInterview?.transcript || ''),
       blockStatus: accumulatedBlockStatus || session.liveInterview?.blockStatus || {},
+      activeSuggestion: activeSuggestion !== undefined ? activeSuggestion : (session.liveInterview?.activeSuggestion || null),
       updatedAt: new Date().toISOString(),
       ...(isFinal ? { endedAt: new Date().toISOString() } : {})
     };
@@ -1730,18 +1731,19 @@ app.post("/api/admin/sessions/:id/live-interview/analyze", liveInterviewAnalyzeL
     
     const currentBlockStatus = session.liveInterview?.blockStatus || accumulatedBlockStatus || {};
     const priorTranscript = session.liveInterview?.transcript || accumulatedTranscript || '';
+    const currentActiveSuggestion = activeSuggestion || session.liveInterview?.activeSuggestion || null;
 
     // Construct the prompt for Gemini
     const systemPrompt = `You are an AI assistant for a human interviewer conducting a live bilingual (English/Spanish) job interview.
 You are receiving a short audio segment of the ongoing interview.
-Your task is to transcribe the audio, map progress against the interview guide blocks, and provide the EXACT LITERAL QUESTION for the interviewer to speak next.
+Your task is to transcribe the audio, map progress against the interview guide blocks, and manage the SINGLE STABLE ACTIVE QUESTION ("activeSuggestion") for the interviewer.
 
 IMPORTANT RULES:
 1. This is ASSISTANCE for the human, NOT a final verdict. NEVER reject the candidate.
 2. The order of the conversation may NOT follow the guide order. Map whatever is said to the relevant block(s).
 3. The conversation may switch between English and Spanish frequently. Handle both natively.
 4. Non-native speakers using formal/broken language is NOT a red flag by itself.
-5. OUTPUT LANGUAGE — CRITICAL: Write EVERY analysis field — evidence, reasoning, gaps, suggestions.text, suggestions.exactQuestion, and languageNote — in ${langName} ONLY, no matter what language the candidate or interviewer speaks. Even if the entire interview is in Spanish, your analysis MUST be written in ${langName}. The ONLY field that keeps the original spoken language is transcriptSegment (never translate the transcript). Do not mix languages in the analysis fields.
+5. OUTPUT LANGUAGE — CRITICAL: Write EVERY analysis field — evidence, reasoning, gaps, activeSuggestion.exactQuestion, activeSuggestion.text, suggestions.text, and languageNote — in ${langName} ONLY, no matter what language the candidate or interviewer speaks. Even if the entire interview is in Spanish, your analysis MUST be written in ${langName}. The ONLY field that keeps the original spoken language is transcriptSegment (never translate the transcript). Do not mix languages in the analysis fields.
 
 Interview Guide Blocks:
 ${JSON.stringify(session.secondInterviewGuide.blocks.map(b => ({
@@ -1756,47 +1758,45 @@ ${JSON.stringify(session.secondInterviewGuide.blocks.map(b => ({
 Accumulated Block Status so far (probeAttempts and settled state):
 ${JSON.stringify(currentBlockStatus)}
 
+CURRENT ACTIVE SUGGESTION IN EFFECT (STICKY):
+${JSON.stringify(currentActiveSuggestion)}
+
 Recent Full Transcript so far (verify what has already been asked to avoid repetitions):
 ${priorTranscript ? (priorTranscript.length > 3500 ? priorTranscript.slice(-3500) : priorTranscript) : '(Interview just started)'}
 
 ============================================================
-SUGGESTIONS & QUESTION RULES (FOLLOW STRICTLY):
+CORE STABILITY & ACTIVE QUESTION RULES ("activeSuggestion"):
 ============================================================
-1. FOCUS ON ONE PRIORITY BLOCK AT A TIME:
-   - Identify the single highest-priority pending block (prioritize blocks with mustPass: true that are not 'covered' and have settled !== true).
-   - Work on only ONE block at a time. Do NOT overwhelm the interviewer with suggestions for multiple blocks at once.
-   - NEVER suggest questions for blocks where settled = true, nor for blocks that are already 'covered'.
+The interviewer needs a STABLE ("sticky") question that DOES NOT flicker or change every few seconds.
 
-2. EXACT LITERAL QUESTION ("exactQuestion"):
-   - For this chosen priority block, the suggestion MUST include "exactQuestion": the PRECISE, LITERAL QUESTION that the interviewer should ask.
-   - It MUST be worded directly and ready to be read aloud word-for-word (e.g. "${uiLanguage === 'en' ? 'Can you tell me about a time when you had to manage a rush hour in a fast-paced environment?' : '¿Podrías contarme sobre una ocasión en la que tuviste que atender a muchos clientes bajo presión?'}").
-   - NEVER provide a meta-instruction like "Ask about customer service" or "Pregunta sobre experiencia". It MUST be the exact spoken question.
-   - Must be in the UI language: ${langName}.
-   - The suggestion's "text" field can provide a brief reason or context (e.g., "${uiLanguage === 'en' ? 'Evaluate customer conflict handling' : 'Evaluar manejo de conflictos con clientes'}").
+1. BLOCK UPDATES CONTINUE EVERY SEGMENT:
+   - Always evaluate audio, transcribe, and update blockUpdates (status, confidence, liveRating, evidence, reasoning, gaps, probeAttempts, settled) in EVERY segment based on whatever candidate and interviewer say.
 
-3. ATTEMPT CONTROL (Max 2 attempts per block using probeAttempts from Accumulated Block Status):
-   - Look up the block's current probeAttempts in Accumulated Block Status (defaults to 0 if absent):
-   * ATTEMPT 1 (probeAttempts < 1):
-     If the block has not been asked yet, or the candidate's mention was insufficient:
-     - Suggest the exact question with "attempt": 1, and in "blockUpdates" set probeAttempts = 1 for this block.
-   * ATTEMPT 2 (probeAttempts === 1):
-     If the question was asked once and the candidate's answer in the transcript was still insufficient or vague:
-     - Suggest ONE DIFFERENT, more specific reformulation of the question from a fresh angle with "attempt": 2.
-     - In "blockUpdates", set probeAttempts = 2 for this block.
-     - DO NOT repeat the same phrasing as attempt 1.
-   * SETTLE / CLOSE BLOCK (probeAttempts >= 2):
-     If 2 attempts have already been made and the candidate's answer is STILL unsatisfactory or missing:
-     - Mark this block as settled = true in "blockUpdates".
-     - Assign its definitive liveRating (1-5) based on the available evidence (e.g., 1 or 2 if missing/weak).
-     - DO NOT generate any more probing questions for this settled block!
-     - Immediately move to suggest the NEXT pending block (as Attempt 1, setting probeAttempts = 1 on that next block).
-     - Include a brief closing transition suggestion in "text", such as "${uiLanguage === 'en' ? 'Close this block (rating ' : 'Cerrar este bloque (calificación '}" + liveRating + "${uiLanguage === 'en' ? ') and move to: ' : ') y pasar a: '}" + nextBlockTitle.
+2. ACTIVE SUGGESTION STABILITY (CRITICAL):
+   - If there IS an existing activeSuggestion currently in effect:
+     * Check the ongoing conversation and recent transcript carefully to see if the interviewer HAS ALREADY ASKED that question or addressed that topic.
+     * Note: The interviewer may have asked it using their own conversational words, in English or Spanish; it does NOT need to be word-for-word identical.
+     
+     * CASE A: The interviewer has NOT asked or addressed this active question yet:
+       -> YOU MUST KEEP AND RETURN THE EXACT SAME activeSuggestion without ANY changes! (Keep the identical exactQuestion, text, blockId, and attempt).
+       -> DO NOT replace it with a different question, do not change wording, and do not switch blocks just because another segment has elapsed. The interviewer will ask it when it naturally fits their conversation flow.
+     
+     * CASE B: The interviewer HAS asked or addressed this active question:
+       -> Evaluate the candidate's response to it:
+          a) If the candidate's answer was insufficient or vague, and attempt < 2:
+             - Formulate a NEW activeSuggestion: a distinct, more specific reformulation of the question for the SAME block, with attempt: 2.
+             - Set probeAttempts: 2 on that block in blockUpdates.
+          b) If the candidate answered satisfactorily (mark block status: "covered" with liveRating 3-5) OR if 2 attempts have now been exhausted (mark block settled: true with liveRating 1-2):
+             - Advance to the NEXT pending priority block (mustPass: true first, not covered, not settled).
+             - Formulate a NEW activeSuggestion for this new block with attempt: 1, exactQuestion in ${langName}, and set probeAttempts: 1 in blockUpdates.
+             - If all blocks in the guide are now covered or settled, set activeSuggestion to null.
 
-4. SATISFACTORY ANSWER:
-   - If the candidate responds satisfactorily at ANY attempt, mark the block status = "covered" with its liveRating (3-5), and do not suggest further questions on this block.
+   - If there is NO activeSuggestion currently in effect (e.g. at the beginning of the interview):
+     * Pick the top pending priority block (mustPass: true first, not covered, not settled).
+     * Create the initial activeSuggestion with exactQuestion in ${langName}, blockId, attempt: 1, and in blockUpdates set probeAttempts: 1.
 
-5. NEVER REPEAT ALREADY ASKED QUESTIONS:
-   - Check the transcript. Do NOT suggest a question that has already been asked in the transcript.
+3. "suggestions" ARRAY:
+   - Use the "suggestions" array ONLY for secondary warnings, red flags (isFlag: true), or language barrier alerts. Do not duplicate activeSuggestion here.
 
 Return a strict JSON object with this structure:
 {
@@ -1813,13 +1813,17 @@ Return a strict JSON object with this structure:
       "settled": "boolean (true ONLY when closing block after 2 attempts or definitively finished)"
     }
   },
+  "activeSuggestion": {
+    "exactQuestion": "THE LITERAL READ-ALOUD QUESTION FOR THE INTERVIEWER TO ASK in the UI language: ${langName}",
+    "text": "Brief contextual tip or objective in ${langName}",
+    "blockId": "id_of_the_block",
+    "attempt": 1 | 2
+  } | null,
   "suggestions": [
     {
-      "text": "Brief contextual guidance or transition note in the UI language: ${langName}",
+      "text": "Secondary alert or red flag in the UI language: ${langName}",
       "isFlag": boolean,
-      "relatedBlockId": "id of the block",
-      "exactQuestion": "THE LITERAL READ-ALOUD QUESTION FOR THE INTERVIEWER TO ASK in the UI language: ${langName}",
-      "attempt": 1 | 2
+      "relatedBlockId": "optional_block_id"
     }
   ],
   "languageNote": "Optional note in the UI language (${langName}) if the candidate is struggling with English or only responding in Spanish to English questions."
@@ -1923,11 +1927,27 @@ Return a strict JSON object with this structure:
       }
     }
 
+    // Merge active suggestion cleanly
+    let finalActiveSuggestion: any = prevLive.activeSuggestion || null;
+    if (aiResult.activeSuggestion !== undefined) {
+      if (aiResult.activeSuggestion && aiResult.activeSuggestion.exactQuestion && aiResult.activeSuggestion.blockId) {
+        finalActiveSuggestion = {
+          exactQuestion: String(aiResult.activeSuggestion.exactQuestion),
+          text: aiResult.activeSuggestion.text ? String(aiResult.activeSuggestion.text) : undefined,
+          blockId: String(aiResult.activeSuggestion.blockId),
+          attempt: Number(aiResult.activeSuggestion.attempt) || 1
+        };
+      } else if (aiResult.activeSuggestion === null) {
+        finalActiveSuggestion = null;
+      }
+    }
+
     session.liveInterview = {
       consentConfirmedAt: prevLive.consentConfirmedAt || consentConfirmedAt,
       startedAt: prevLive.startedAt,
       transcript: newTranscript,
       blockStatus: newBlockStatus,
+      activeSuggestion: finalActiveSuggestion,
       suggestions: (aiResult.suggestions || []).map((s: any) => ({
         text: s.text || '',
         isFlag: !!s.isFlag,

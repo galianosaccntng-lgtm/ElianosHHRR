@@ -100,6 +100,13 @@ export interface LiveInterviewSuggestion {
   attempt?: number;
 }
 
+export interface ActiveSuggestion {
+  exactQuestion: string;
+  text?: string;
+  blockId: string;
+  attempt: number;
+}
+
 export interface LiveInterviewState {
   consentConfirmedAt?: string;
   startedAt?: string;
@@ -107,6 +114,7 @@ export interface LiveInterviewState {
   transcript: string;
   blockStatus: Record<string, LiveInterviewBlockStatus>;
   suggestions: LiveInterviewSuggestion[];
+  activeSuggestion?: ActiveSuggestion | null;
   languageNote?: string;
   updatedAt: string;
 }

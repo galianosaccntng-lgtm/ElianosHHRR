@@ -25,6 +25,20 @@ export function LiveInterviewPanel({
   const liveStateRef = useRef(liveState);
   const isResettingRef = useRef(false);
   const [showResetModal, setShowResetModal] = useState(false);
+  const [justChanged, setJustChanged] = useState(false);
+  const prevQuestionRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    const currentQ = liveState?.activeSuggestion?.exactQuestion;
+    if (prevQuestionRef.current && currentQ && prevQuestionRef.current !== currentQ) {
+      setJustChanged(true);
+      const timer = setTimeout(() => setJustChanged(false), 2500);
+      return () => clearTimeout(timer);
+    }
+    if (currentQ) {
+      prevQuestionRef.current = currentQ;
+    }
+  }, [liveState?.activeSuggestion?.exactQuestion]);
   
   useEffect(() => {
     if (isResettingRef.current) return;
@@ -235,6 +249,7 @@ export function LiveInterviewPanel({
         },
         body: JSON.stringify({
           isFinal: true,
+          activeSuggestion: liveStateRef.current?.activeSuggestion || liveState?.activeSuggestion || null,
           uiLanguage: lang
         })
       });
@@ -265,6 +280,7 @@ export function LiveInterviewPanel({
           body: JSON.stringify({
             audioData: base64data,
             mimeType: blob.type,
+            activeSuggestion: liveStateRef.current?.activeSuggestion || liveState?.activeSuggestion || null,
             uiLanguage: lang
           })
         });
@@ -599,39 +615,54 @@ export function LiveInterviewPanel({
                </div>
              )}
              <div className="space-y-3">
-               {liveState?.suggestions && liveState.suggestions.length > 0 ? (
-                 liveState.suggestions.map((s, i) => {
-                   const relatedBlock = s.relatedBlockId 
-                     ? guide.blocks.find(b => b.id === s.relatedBlockId) 
-                     : undefined;
-                   const hasExact = !!s.exactQuestion;
-                   
+               {(() => {
+                 const active = liveState?.activeSuggestion || (
+                   liveState?.suggestions?.find(s => s.exactQuestion) ? {
+                     exactQuestion: liveState.suggestions.find(s => s.exactQuestion)!.exactQuestion!,
+                     text: liveState.suggestions.find(s => s.exactQuestion)!.text,
+                     blockId: liveState.suggestions.find(s => s.exactQuestion)!.relatedBlockId || '',
+                     attempt: liveState.suggestions.find(s => s.exactQuestion)!.attempt || 1
+                   } : null
+                 );
+                 const secondarySuggestions = (liveState?.suggestions || []).filter(s => 
+                   !active || (s.exactQuestion !== active.exactQuestion && s.text !== active.text)
+                 );
+
+                 const relatedBlock = active?.blockId 
+                   ? guide.blocks.find(b => b.id === active.blockId) 
+                   : undefined;
+
+                 if (!active && secondarySuggestions.length === 0) {
                    return (
-                     <div 
-                       key={i} 
-                       className={`p-3.5 rounded-2xl shadow-xs border transition-all ${
-                         s.isFlag 
-                           ? 'bg-rose-50 border-rose-200 text-rose-900' 
-                           : hasExact 
-                             ? 'bg-white border-blue-200/90 text-blue-950 ring-1 ring-blue-400/20' 
-                             : 'bg-white border-blue-100 text-blue-900'
-                       }`}
-                     >
-                       {/* Header badges: Attempt & Block */}
-                       {(hasExact || s.attempt || relatedBlock) && (
+                     <div className="h-full min-h-[220px] flex items-center justify-center text-blue-300 text-sm font-medium">
+                       {t.liveListeningForSuggestions}
+                     </div>
+                   );
+                 }
+
+                 return (
+                   <div className="space-y-4">
+                     {/* Active Question - Highlighted and Stable */}
+                     {active && (
+                       <div 
+                         className={`p-4 rounded-2xl border transition-all duration-300 ${
+                           justChanged 
+                             ? 'bg-blue-100/90 border-blue-400 ring-2 ring-blue-400/40 shadow-md' 
+                             : 'bg-white border-blue-200 text-blue-950 shadow-xs ring-1 ring-blue-400/20'
+                         }`}
+                       >
+                         {/* Header badges: Question to ask, Attempt & Block */}
                          <div className="flex flex-wrap items-center gap-1.5 mb-2.5">
-                           {hasExact && (
-                             <span className="inline-flex items-center px-2 py-0.5 rounded-md text-[10px] font-bold uppercase tracking-wider bg-blue-600 text-white shadow-2xs">
-                               {t.liveQuestionToAskLabel}
-                             </span>
-                           )}
-                           {s.attempt && (
+                           <span className="inline-flex items-center px-2 py-0.5 rounded-md text-[10px] font-bold uppercase tracking-wider bg-blue-600 text-white shadow-2xs">
+                             {t.liveQuestionToAskLabel}
+                           </span>
+                           {active.attempt && (
                              <span className={`inline-flex items-center px-2 py-0.5 rounded-md text-[10px] font-bold uppercase tracking-wider ${
-                               s.attempt === 2 
+                               active.attempt === 2 
                                  ? 'bg-amber-100 text-amber-800 border border-amber-300/80' 
                                  : 'bg-indigo-100 text-indigo-800 border border-indigo-200/80'
                              }`}>
-                               {t.liveAttemptLabel} {s.attempt}/2
+                               {t.liveAttemptLabel} {active.attempt}/2
                              </span>
                            )}
                            {relatedBlock && (
@@ -640,31 +671,49 @@ export function LiveInterviewPanel({
                              </span>
                            )}
                          </div>
-                       )}
 
-                       {/* Exact Question to Speak Out Loud */}
-                       {hasExact && (
-                         <div className="p-3 bg-blue-50/70 border border-blue-200/70 rounded-xl mb-2 text-slate-900 font-serif text-sm font-semibold leading-relaxed">
-                           <span className="text-blue-500 font-sans mr-1 text-base select-none">“</span>
-                           {s.exactQuestion}
-                           <span className="text-blue-500 font-sans ml-1 text-base select-none">”</span>
+                         {/* Exact Question to Speak Out Loud */}
+                         <div className="p-3.5 bg-blue-50/80 border border-blue-200/80 rounded-xl mb-2 text-slate-950 font-serif text-sm md:text-base font-semibold leading-relaxed">
+                           <span className="text-blue-500 font-sans mr-1.5 text-base select-none">“</span>
+                           {active.exactQuestion}
+                           <span className="text-blue-500 font-sans ml-1.5 text-base select-none">”</span>
                          </div>
-                       )}
 
-                       {/* Generic / context advice secondary */}
-                       {s.text && (
-                         <p className={`text-xs leading-relaxed ${hasExact ? 'text-slate-600 font-medium' : 'font-medium'}`}>
-                           {s.text}
-                         </p>
-                       )}
-                     </div>
-                   );
-                 })
-               ) : (
-                 <div className="h-full flex items-center justify-center text-blue-300 text-sm font-medium">
-                   {t.liveListeningForSuggestions}
-                 </div>
-               )}
+                         {/* Discreet stability hint */}
+                         <div className="flex items-center gap-1.5 text-[11px] font-medium text-slate-500 mt-1 mb-1">
+                           <span className="w-1.5 h-1.5 rounded-full bg-blue-500 shrink-0"></span>
+                           <span>{t.livePendingQuestionHint}</span>
+                         </div>
+
+                         {/* Context note if available */}
+                         {active.text && (
+                           <p className="text-xs text-slate-600 font-medium leading-relaxed mt-1">
+                             {active.text}
+                           </p>
+                         )}
+                       </div>
+                     )}
+
+                     {/* Secondary suggestions / flags */}
+                     {secondarySuggestions.length > 0 && (
+                       <div className="space-y-2 pt-2 border-t border-blue-100/80">
+                         {secondarySuggestions.map((s, i) => (
+                           <div 
+                             key={i} 
+                             className={`p-3 rounded-xl border text-xs leading-relaxed ${
+                               s.isFlag 
+                                 ? 'bg-rose-50 border-rose-200 text-rose-900 font-medium' 
+                                 : 'bg-white/90 border-slate-200 text-slate-700 font-medium'
+                             }`}
+                           >
+                             {s.text}
+                           </div>
+                         ))}
+                       </div>
+                     )}
+                   </div>
+                 );
+               })()}
              </div>
           </div>
 
