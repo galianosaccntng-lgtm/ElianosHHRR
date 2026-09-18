@@ -697,6 +697,7 @@ REGLAS DE CONTENIDO:
       }
 
       const guide: SecondInterviewGuide = {
+        forPosition: position || "Barista",
         generatedAt: new Date().toISOString(),
         focusPoints: parsed.focusPoints,
         interviewerTips: parsed.interviewerTips,
@@ -1032,7 +1033,7 @@ app.post("/api/admin/sessions/:id/second-interview-guide", secondInterviewGuideL
   if (!verifyAdminAccess(authHeader, res)) return;
 
   const { id } = req.params;
-  const { force, lang } = req.body || {};
+  const { force, lang, targetPosition } = req.body || {};
 
   try {
     const sessions = await getStoredSessions();
@@ -1041,23 +1042,59 @@ app.post("/api/admin/sessions/:id/second-interview-guide", secondInterviewGuideL
       return res.status(404).json({ success: false, error: "Session not found" });
     }
 
-    if (session.secondInterviewGuide && !force) {
-      return res.json({ success: true, guide: session.secondInterviewGuide });
+    const validPositions = ['Barista', 'Shift Leader', 'Store Manager'];
+    if (targetPosition && !validPositions.includes(targetPosition)) {
+      return res.status(400).json({
+        success: false,
+        error: lang === 'en'
+          ? "Invalid target position. Must be Barista, Shift Leader, or Store Manager."
+          : "Posición objetivo inválida. Debe ser Barista, Shift Leader o Store Manager."
+      });
     }
 
-    const guide = await generateSecondInterviewGuide(session, lang || 'es');
-    
+    const currentGuidePos = session.secondInterviewGuide?.forPosition || session.position || 'Barista';
+    const effectivePos = (targetPosition as 'Barista' | 'Shift Leader' | 'Store Manager') || currentGuidePos;
+    const isPositionChange = !!targetPosition && targetPosition !== currentGuidePos;
+
+    if (session.secondInterviewGuide && !force && !isPositionChange) {
+      return res.json({ success: true, guide: session.secondInterviewGuide, session });
+    }
+
+    const guide = await generateSecondInterviewGuide({ ...session, position: effectivePos }, lang || 'es');
+    guide.forPosition = effectivePos;
+
+    let updatedLiveInterview = session.liveInterview;
+    if (session.liveInterview && isPositionChange) {
+      // Partial reset: blocks change, so block evaluations & suggestions reset,
+      // but PRESERVE the ongoing conversation transcript and consent
+      updatedLiveInterview = {
+        consentConfirmedAt: session.liveInterview.consentConfirmedAt,
+        startedAt: session.liveInterview.startedAt,
+        endedAt: session.liveInterview.endedAt,
+        transcript: session.liveInterview.transcript || '',
+        blockStatus: {},
+        suggestions: [],
+        activeSuggestion: null,
+        finalEvaluation: null,
+        crossPositionEvaluations: {},
+        positionSuggestion: undefined,
+        languageNote: undefined,
+        updatedAt: new Date().toISOString(),
+      };
+    }
+
     const updatedSession = {
       ...session,
       secondInterviewGuide: guide,
-      secondInterviewScores: force ? undefined : session.secondInterviewScores,
+      secondInterviewScores: (force || isPositionChange) ? undefined : session.secondInterviewScores,
+      liveInterview: updatedLiveInterview,
     };
-    if (force) {
+    if (force || isPositionChange) {
       delete updatedSession.secondInterviewScores;
     }
 
     await upsertSession(updatedSession);
-    return res.json({ success: true, guide });
+    return res.json({ success: true, guide, session: updatedSession });
   } catch (err: any) {
     console.error("[SecondInterviewGuide] Error generating guide:", err);
     return res.status(503).json({
@@ -1742,18 +1779,21 @@ app.post("/api/admin/sessions/:id/live-interview/analyze", liveInterviewAnalyzeL
     const currentBlockStatus = session.liveInterview?.blockStatus || accumulatedBlockStatus || {};
     const priorTranscript = session.liveInterview?.transcript || accumulatedTranscript || '';
     const currentActiveSuggestion = activeSuggestion || session.liveInterview?.activeSuggestion || null;
+    const currentRole = session.secondInterviewGuide?.forPosition || session.position || 'Barista';
 
     // Construct the prompt for Gemini
     const systemPrompt = `You are an AI assistant for a human interviewer conducting a live bilingual (English/Spanish) job interview.
 You are receiving a short audio segment of the ongoing interview.
 Your task is to transcribe the audio, map progress against the interview guide blocks, and manage the SINGLE STABLE ACTIVE QUESTION ("activeSuggestion") for the interviewer.
 
+Current Position being evaluated: "${currentRole}" (Candidate originally applied for: "${session.position || 'Barista'}").
+
 IMPORTANT RULES:
 1. This is ASSISTANCE for the human, NOT a final verdict. NEVER reject the candidate.
 2. The order of the conversation may NOT follow the guide order. Map whatever is said to the relevant block(s).
 3. The conversation may switch between English and Spanish frequently. Handle both natively.
 4. Non-native speakers using formal/broken language is NOT a red flag by itself.
-5. OUTPUT LANGUAGE — CRITICAL: Write EVERY analysis field — evidence, reasoning, gaps, activeSuggestion.exactQuestion, activeSuggestion.text, suggestions.text, and languageNote — in ${langName} ONLY, no matter what language the candidate or interviewer speaks. Even if the entire interview is in Spanish, your analysis MUST be written in ${langName}. The ONLY field that keeps the original spoken language is transcriptSegment (never translate the transcript). Do not mix languages in the analysis fields.
+5. OUTPUT LANGUAGE — CRITICAL: Write EVERY analysis field — evidence, reasoning, gaps, activeSuggestion.exactQuestion, activeSuggestion.text, suggestions.text, positionSuggestion.reason, and languageNote — in ${langName} ONLY, no matter what language the candidate or interviewer speaks. Even if the entire interview is in Spanish, your analysis MUST be written in ${langName}. The ONLY field that keeps the original spoken language is transcriptSegment (never translate the transcript). Do not mix languages in the analysis fields.
 
 Interview Guide Blocks:
 ${JSON.stringify(session.secondInterviewGuide.blocks.map(b => ({
@@ -1808,6 +1848,12 @@ The interviewer needs a STABLE ("sticky") question that DOES NOT flicker or chan
 3. "suggestions" ARRAY:
    - Use the "suggestions" array ONLY for secondary warnings, red flags (isFlag: true), or language barrier alerts. Do not duplicate activeSuggestion here.
 
+4. POSITION CHANGE SUGGESTION ("positionSuggestion"):
+   - Assess whether the candidate is struggling with the MUST-PASS blocks of the current position ("${currentRole}"), but displays qualities or experience better suited for another role (options: 'Barista', 'Shift Leader', 'Store Manager').
+   - If one or more must-pass blocks are clearly failing (settled with liveRating 1 or 2) and the candidate shows aptitude for another position (e.g., lacks supervisory skills for Store Manager but has great speed and customer attitude for Barista or Shift Leader), set "positionSuggestion": { "suggest": true, "position": "<another position>", "reason": "1-2 brief sentences in ${langName} explaining the recommendation" }.
+   - If the candidate is performing adequately, blocks are not settled yet, or evidence is inconclusive, set "positionSuggestion": { "suggest": false, "position": "${currentRole}", "reason": "" }.
+   - Do NOT suggest role changes prematurely or repetitively if the interview is just beginning.
+
 Return a strict JSON object with this structure:
 {
   "transcriptSegment": "Transcription of THIS audio segment exactly as spoken (do NOT translate; preserve the spoken English/Spanish mixture). Prefix with speaker if distinguishable (e.g. 'Interviewer: ...' or 'Candidate: ...').",
@@ -1836,6 +1882,11 @@ Return a strict JSON object with this structure:
       "relatedBlockId": "optional_block_id"
     }
   ],
+  "positionSuggestion": {
+    "suggest": boolean,
+    "position": "Barista" | "Shift Leader" | "Store Manager",
+    "reason": "Brief reason in ${langName}"
+  },
   "languageNote": "Optional note in the UI language (${langName}) if the candidate is struggling with English or only responding in Spanish to English questions."
 }`;
 
@@ -1952,9 +2003,29 @@ Return a strict JSON object with this structure:
       }
     }
 
+    // Process position switch suggestion
+    let positionSuggestion: any = prevLive.positionSuggestion;
+    if (aiResult.positionSuggestion && typeof aiResult.positionSuggestion === 'object') {
+      const p = aiResult.positionSuggestion;
+      if (p.suggest && ['Barista', 'Shift Leader', 'Store Manager'].includes(p.position) && p.position !== currentRole) {
+        positionSuggestion = {
+          suggest: true,
+          position: p.position,
+          reason: String(p.reason || '')
+        };
+      } else {
+        positionSuggestion = {
+          suggest: false,
+          position: p.position || currentRole,
+          reason: ''
+        };
+      }
+    }
+
     session.liveInterview = {
       consentConfirmedAt: prevLive.consentConfirmedAt || consentConfirmedAt,
       startedAt: prevLive.startedAt,
+      endedAt: prevLive.endedAt,
       transcript: newTranscript,
       blockStatus: newBlockStatus,
       activeSuggestion: finalActiveSuggestion,
@@ -1965,6 +2036,9 @@ Return a strict JSON object with this structure:
         exactQuestion: s.exactQuestion || undefined,
         attempt: typeof s.attempt === 'number' ? s.attempt : undefined
       })),
+      positionSuggestion,
+      finalEvaluation: prevLive.finalEvaluation,
+      crossPositionEvaluations: prevLive.crossPositionEvaluations,
       languageNote: aiResult.languageNote,
       updatedAt: new Date().toISOString()
     };

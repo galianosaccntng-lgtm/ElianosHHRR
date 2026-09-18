@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { InterviewSession, InterviewStatus, SecondInterviewGuide, SecondInterviewScores } from '../types';
+import { InterviewSession, InterviewStatus, SecondInterviewGuide, SecondInterviewScores, Position } from '../types';
 import { ArrowLeft, CheckCircle2, MessageSquare, ChevronRight, FileText, Trash2, Award, Copy, Check, ShieldCheck, LogOut, RefreshCw, Search, Mail, Phone, Loader2, AlertCircle, Clock, PlayCircle, ExternalLink, RotateCcw, Sparkles, Star, HelpCircle, Save, Printer } from 'lucide-react';
 import clsx from 'clsx';
 import Markdown from 'react-markdown';
@@ -789,9 +789,9 @@ export function Dashboard({ adminToken, onBack, onLogout, onResume, onDelete, on
     }, 800);
   };
 
-  const handleGenerateGuide = async (force = false) => {
+  const handleGenerateGuide = async (force = false, targetPosition?: Position) => {
     if (!selectedSession || !adminToken || isGeneratingGuide) return;
-    if (force && !window.confirm(t.guideConfirmForce)) {
+    if (force && !targetPosition && !window.confirm(t.guideConfirmForce)) {
       return;
     }
 
@@ -805,7 +805,7 @@ export function Dashboard({ adminToken, onBack, onLogout, onResume, onDelete, on
           'Content-Type': 'application/json',
           'x-admin-passcode': adminToken,
         },
-        body: JSON.stringify({ force, lang }),
+        body: JSON.stringify({ force, lang, targetPosition }),
       });
 
       const data = await res.json();
@@ -813,12 +813,12 @@ export function Dashboard({ adminToken, onBack, onLogout, onResume, onDelete, on
         throw new Error(data.error || t.guideAiErrorDefault);
       }
 
-      const updatedSession: InterviewSession = {
+      const updatedSession: InterviewSession = data.session || {
         ...selectedSession,
         secondInterviewGuide: data.guide,
-        secondInterviewScores: force ? undefined : selectedSession.secondInterviewScores,
+        secondInterviewScores: (force || targetPosition) ? undefined : selectedSession.secondInterviewScores,
       };
-      if (force) {
+      if (force || targetPosition) {
         delete updatedSession.secondInterviewScores;
         setScores({});
         setNotes({});
@@ -2041,6 +2041,16 @@ ${t.copyContactStatus} ${effectiveStatusLabel}`;
                         onDumpScores={(newScores) => {
                           setScores(prev => ({ ...prev, ...newScores }));
                         }}
+                        onSessionUpdated={(updatedSession) => {
+                          const updatedList = sessions.map(s => s.id === updatedSession.id ? updatedSession : s);
+                          setSessions(updatedList);
+                          if (onSessionsUpdated) onSessionsUpdated(updatedList);
+                          try {
+                            localStorage.setItem(STORAGE_KEY, JSON.stringify(updatedList));
+                          } catch (e) {
+                            console.warn('LocalStorage save warning:', e);
+                          }
+                        }}
                       />
                       {(() => {
                       const guide = selectedSession.secondInterviewGuide;
@@ -2109,10 +2119,15 @@ ${t.copyContactStatus} ${effectiveStatusLabel}`;
                           {/* Guide Top Header & Controls */}
                           <div className="bg-white border border-[#E8DFD8] rounded-2xl p-6 shadow-xs flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
                             <div>
-                              <div className="flex items-center gap-2 mb-1">
+                              <div className="flex items-center gap-2 mb-1 flex-wrap">
                                 <span className="text-[10px] uppercase tracking-widest font-bold px-2.5 py-0.5 rounded-full bg-purple-100 text-purple-900 border border-purple-300 flex items-center gap-1">
-                                  <Sparkles className="w-3 h-3 text-purple-700" /> {t.guideCustomBadge}
+                                  <Sparkles className="w-3 h-3 text-purple-700" /> {guide.forPosition ? t.guideForPositionBadge(guide.forPosition) : t.guideCustomBadge}
                                 </span>
+                                {guide.forPosition && guide.forPosition !== selectedSession.position && (
+                                  <span className="text-[10px] uppercase tracking-widest font-bold px-2 py-0.5 rounded-full bg-amber-100 text-amber-900 border border-amber-300">
+                                    {t.guideAppliedPositionBadge(selectedSession.position || '')}
+                                  </span>
+                                )}
                                 {guide.generatedAt && (
                                   <span className="text-xs text-[#4B2C20]/60 font-light">
                                     {t.guideGeneratedAt(formatInterviewDate(guide.generatedAt, lang), '')}
@@ -2125,6 +2140,12 @@ ${t.copyContactStatus} ${effectiveStatusLabel}`;
                               <p className="text-xs text-[#4B2C20]/70 font-light mt-0.5">
                                 {t.guideHeaderDesc(selectedSession.candidateInfo?.name || t.applicantFallback)}
                               </p>
+                              {guide.forPosition && guide.forPosition !== selectedSession.position && (
+                                <div className="mt-2 px-3 py-1.5 bg-amber-50 border border-amber-200 rounded-lg text-xs text-amber-900 flex items-center gap-1.5 inline-flex">
+                                  <AlertCircle className="w-3.5 h-3.5 text-amber-600 shrink-0" />
+                                  <span>{t.guidePositionMismatchNotice(guide.forPosition, selectedSession.position || '')}</span>
+                                </div>
+                              )}
                             </div>
 
                             <div className="flex flex-wrap items-center gap-2 shrink-0">

@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { mapLiveStateToScores } from '../patch';
-import { InterviewSession, LiveInterviewState, SecondInterviewBlock, LiveInterviewFinalEvaluation } from '../types';
-import { Mic, Square, Pause, AlertCircle, Play, CheckCircle2, Circle, Loader2, RotateCcw, Sparkles, Copy, Check, Printer, AlertTriangle, XCircle, Star, Briefcase } from 'lucide-react';
+import { InterviewSession, LiveInterviewState, SecondInterviewBlock, LiveInterviewFinalEvaluation, Position } from '../types';
+import { Mic, Square, Pause, AlertCircle, Play, CheckCircle2, Circle, Loader2, RotateCcw, Sparkles, Copy, Check, Printer, AlertTriangle, XCircle, Star, Briefcase, ArrowRightCircle, RefreshCw } from 'lucide-react';
 import { adminI18n, AdminLang } from '../i18n-admin';
 
 function escapeHtml(str: string): string {
@@ -229,7 +229,8 @@ export function LiveInterviewPanel({
   lang = 'es',
   onStateUpdate,
   onReset,
-  onDumpScores
+  onDumpScores,
+  onSessionUpdated,
 }: { 
   session: InterviewSession; 
   adminToken: string;
@@ -237,15 +238,81 @@ export function LiveInterviewPanel({
   onStateUpdate: () => void;
   onReset?: () => void;
   onDumpScores: (scores: Record<string, number>) => void;
+  onSessionUpdated?: (updatedSession: InterviewSession) => void;
 }) {
   const t = adminI18n[lang];
   const guide = session.secondInterviewGuide;
+  const currentGuidePosition: Position = (guide?.forPosition || session.position || 'Barista') as Position;
   const [liveState, setLiveState] = useState(session.liveInterview);
   const liveStateRef = useRef(liveState);
   const isResettingRef = useRef(false);
   const [showResetModal, setShowResetModal] = useState(false);
   const [justChanged, setJustChanged] = useState(false);
   const prevQuestionRef = useRef<string | null>(null);
+
+  // Position switch states
+  const [targetPositionToSwitch, setTargetPositionToSwitch] = useState<Position | null>(null);
+  const [showSwitchConfirmModal, setShowSwitchConfirmModal] = useState(false);
+  const [isSwitchingPosition, setIsSwitchingPosition] = useState(false);
+  const [manualSelectedPosition, setManualSelectedPosition] = useState<Position>(
+    currentGuidePosition === 'Barista' ? 'Shift Leader' : (currentGuidePosition === 'Shift Leader' ? 'Store Manager' : 'Barista')
+  );
+
+  const handleInitiatePositionSwitch = (pos: Position) => {
+    setTargetPositionToSwitch(pos);
+    setShowSwitchConfirmModal(true);
+  };
+
+  const executePositionSwitch = async () => {
+    if (!targetPositionToSwitch) return;
+    setIsSwitchingPosition(true);
+
+    try {
+      const res = await fetch(`/api/admin/sessions/${session.id}/second-interview-guide`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-admin-passcode': adminToken,
+        },
+        body: JSON.stringify({
+          force: true,
+          lang,
+          targetPosition: targetPositionToSwitch,
+        }),
+      });
+
+      const data = await res.json();
+      if (!res.ok || !data.success || !data.guide) {
+        throw new Error(data.error || 'Failed to switch position');
+      }
+
+      // Reset live progress (block evaluations, suggestions, final evaluations), but preserve ongoing conversation transcript and consent
+      const updatedLive = data.session?.liveInterview || {
+        ...(liveStateRef.current || { transcript: '' }),
+        blockStatus: {},
+        suggestions: [],
+        activeSuggestion: null,
+        finalEvaluation: null,
+        crossPositionEvaluations: {},
+        positionSuggestion: undefined,
+        updatedAt: new Date().toISOString(),
+      };
+      setLiveState(updatedLive);
+      liveStateRef.current = updatedLive;
+
+      if (onSessionUpdated && data.session) {
+        onSessionUpdated(data.session);
+      }
+      onStateUpdate();
+      setShowSwitchConfirmModal(false);
+      setTargetPositionToSwitch(null);
+    } catch (err: any) {
+      console.error("Error switching interview position:", err);
+      alert(err.message || 'Error switching position');
+    } finally {
+      setIsSwitchingPosition(false);
+    }
+  };
 
   const [isGeneratingFinalEval, setIsGeneratingFinalEval] = useState(false);
   const [copiedFinalEval, setCopiedFinalEval] = useState(false);
@@ -776,9 +843,19 @@ export function LiveInterviewPanel({
       
       <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 mb-6 relative z-10">
         <div>
-          <h3 className="text-xl font-serif font-bold text-purple-900 flex items-center gap-2">
-            <Mic className="w-5 h-5" /> {t.liveInterviewTitle}
-          </h3>
+          <div className="flex items-center gap-2 flex-wrap mb-1">
+            <h3 className="text-xl font-serif font-bold text-purple-900 flex items-center gap-2">
+              <Mic className="w-5 h-5" /> {t.liveInterviewTitle}
+            </h3>
+            <span className="text-[10px] uppercase font-bold tracking-wider px-2.5 py-0.5 rounded-full bg-purple-100 text-purple-900 border border-purple-300">
+              {t.guideForPositionBadge(currentGuidePosition)}
+            </span>
+            {currentGuidePosition !== session.position && (
+              <span className="text-[10px] uppercase font-bold tracking-wider px-2 py-0.5 rounded-full bg-amber-100 text-amber-900 border border-amber-300">
+                {t.guideAppliedPositionBadge(session.position || '')}
+              </span>
+            )}
+          </div>
           <p className="text-sm text-purple-700/80 font-medium">{t.liveInterviewSubtitle}</p>
         </div>
         
@@ -817,7 +894,7 @@ export function LiveInterviewPanel({
               <span className="px-4 py-2 bg-gray-100 text-gray-700 font-bold rounded-lg border text-sm">
                 {t.liveInterviewEnded}
               </span>
-              <button
+              <button 
                 onClick={() => {
                   const scores = mapLiveStateToScores(liveState, guide.blocks);
                   onDumpScores(scores);
@@ -866,6 +943,82 @@ export function LiveInterviewPanel({
               {t.liveInterviewResetBtn}
             </button>
           )}
+        </div>
+      </div>
+
+      {/* Prominent AI Role Switch Suggestion Banner */}
+      {liveState?.positionSuggestion?.suggest &&
+       liveState.positionSuggestion.position &&
+       liveState.positionSuggestion.position !== currentGuidePosition && (
+        <div className="mb-6 p-4 rounded-2xl bg-gradient-to-r from-amber-50 via-orange-50 to-amber-50 border-2 border-amber-300 shadow-xs relative z-10">
+          <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+            <div className="flex items-start gap-3">
+              <div className="p-2 bg-amber-200/80 rounded-xl text-amber-900 shrink-0 mt-0.5">
+                <Sparkles className="w-5 h-5 text-amber-800" />
+              </div>
+              <div>
+                <div className="flex items-center gap-2 flex-wrap">
+                  <h4 className="font-bold text-amber-950 text-sm">{t.liveSwitchSuggestionTitle}</h4>
+                  <span className="text-[10px] uppercase font-bold tracking-wider px-2 py-0.5 rounded-full bg-amber-200 text-amber-900 border border-amber-300">
+                    {liveState.positionSuggestion.position}
+                  </span>
+                </div>
+                <p className="text-xs text-amber-900/90 mt-1 leading-relaxed">
+                  {t.liveSwitchSuggestionAlert(liveState.positionSuggestion.position, liveState.positionSuggestion.reason)}
+                </p>
+              </div>
+            </div>
+            <button
+              onClick={() => handleInitiatePositionSwitch(liveState!.positionSuggestion!.position as Position)}
+              disabled={isSwitchingPosition}
+              className="shrink-0 flex items-center gap-1.5 px-4 py-2 bg-amber-600 hover:bg-amber-700 text-white rounded-xl text-xs font-bold shadow-xs transition-colors"
+            >
+              <ArrowRightCircle className="w-4 h-4" />
+              {t.liveSwitchSuggestionBtn(liveState.positionSuggestion.position)}
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Manual Role Switch Control */}
+      <div className="mb-6 p-3.5 rounded-2xl bg-purple-50/70 border border-purple-200/80 shadow-2xs flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 relative z-10">
+        <div className="flex items-center gap-2.5">
+          <div className="p-2 bg-white rounded-xl text-purple-700 border border-purple-100 shrink-0">
+            <Briefcase className="w-4 h-4" />
+          </div>
+          <div>
+            <h4 className="text-xs font-bold text-purple-950 uppercase tracking-wider">{t.liveManualSwitchTitle}</h4>
+            <p className="text-[11px] text-purple-800/70 font-light">{t.liveManualSwitchDesc}</p>
+          </div>
+        </div>
+
+        <div className="flex items-center gap-2 w-full sm:w-auto">
+          <select
+            value={manualSelectedPosition}
+            onChange={(e) => setManualSelectedPosition(e.target.value as Position)}
+            className="text-xs font-semibold px-3 py-2 bg-white border border-purple-200 text-purple-900 rounded-xl focus:outline-none focus:ring-2 focus:ring-purple-400"
+          >
+            <option value="Barista">Barista</option>
+            <option value="Shift Leader">Shift Leader</option>
+            <option value="Store Manager">Store Manager</option>
+          </select>
+          <button
+            onClick={() => handleInitiatePositionSwitch(manualSelectedPosition)}
+            disabled={isSwitchingPosition || manualSelectedPosition === currentGuidePosition}
+            className="flex items-center gap-1.5 px-3.5 py-2 bg-purple-700 hover:bg-purple-800 disabled:opacity-40 text-white rounded-xl text-xs font-bold transition-colors shadow-2xs shrink-0"
+          >
+            {isSwitchingPosition ? (
+              <>
+                <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                <span>{t.liveSwitchingGuide}</span>
+              </>
+            ) : (
+              <>
+                <RefreshCw className="w-3.5 h-3.5" />
+                <span>{t.liveManualSwitchRegenBtn(manualSelectedPosition)}</span>
+              </>
+            )}
+          </button>
         </div>
       </div>
 
@@ -1823,6 +1976,63 @@ export function LiveInterviewPanel({
                   <>
                     <RotateCcw className="w-4 h-4" />
                     <span>{t.liveInterviewResetProceed}</span>
+                  </>
+                )}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Position Switch Confirmation Modal */}
+      {showSwitchConfirmModal && targetPositionToSwitch && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm animate-in fade-in duration-150">
+          <div className="bg-white rounded-3xl p-7 max-w-md w-full shadow-2xl border-2 border-purple-200">
+            <div className="flex items-center gap-3 mb-4 text-purple-700">
+              <div className="w-11 h-11 rounded-2xl bg-purple-50 border border-purple-200/80 flex items-center justify-center shrink-0">
+                <Briefcase className="w-5 h-5 text-purple-700" />
+              </div>
+              <div>
+                <h3 className="text-lg font-serif font-bold text-gray-900 leading-tight">
+                  {t.liveSwitchConfirmTitle}
+                </h3>
+                <span className="text-xs font-semibold text-purple-700 uppercase tracking-wider">
+                  {targetPositionToSwitch}
+                </span>
+              </div>
+            </div>
+
+            <p className="text-sm text-gray-700 leading-relaxed mb-6 bg-purple-50/50 p-4 rounded-2xl border border-purple-100">
+              {t.liveSwitchConfirmPrompt(targetPositionToSwitch)}
+            </p>
+
+            <div className="flex justify-end gap-3">
+              <button
+                type="button"
+                onClick={() => {
+                  setShowSwitchConfirmModal(false);
+                  setTargetPositionToSwitch(null);
+                }}
+                disabled={isSwitchingPosition}
+                className="px-4 py-2.5 text-sm font-bold text-gray-700 hover:bg-gray-100 rounded-xl transition-colors disabled:opacity-50"
+              >
+                {t.liveSwitchCancelBtn}
+              </button>
+              <button
+                type="button"
+                onClick={executePositionSwitch}
+                disabled={isSwitchingPosition}
+                className="flex items-center gap-2 px-5 py-2.5 text-sm font-bold text-white bg-purple-600 hover:bg-purple-700 rounded-xl transition-colors shadow-xs disabled:opacity-50"
+              >
+                {isSwitchingPosition ? (
+                  <>
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                    <span>{t.liveSwitchingGuide}</span>
+                  </>
+                ) : (
+                  <>
+                    <RefreshCw className="w-4 h-4" />
+                    <span>{t.liveSwitchConfirmBtn}</span>
                   </>
                 )}
               </button>

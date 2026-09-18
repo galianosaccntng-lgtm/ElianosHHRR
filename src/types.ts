@@ -45,6 +45,7 @@ export interface SecondInterviewBlock {
 }
 
 export interface SecondInterviewGuide {
+  forPosition?: Position;
   generatedAt: string;
   focusPoints: string[];
   interviewerTips: string[];
@@ -143,6 +144,11 @@ export interface LiveInterviewState {
   activeSuggestion?: ActiveSuggestion | null;
   finalEvaluation?: LiveInterviewFinalEvaluation | null;
   crossPositionEvaluations?: Record<string, LiveInterviewFinalEvaluation>;
+  positionSuggestion?: {
+    suggest: boolean;
+    position: 'Barista' | 'Shift Leader' | 'Store Manager';
+    reason: string;
+  };
   languageNote?: string;
   updatedAt: string;
 }
