@@ -641,13 +641,17 @@ export function Dashboard({ adminToken, onBack, onLogout, onResume, onDelete, on
               }
               mergedMap.set(ls.id, ls);
             } else {
-              // Merge: prefer server deletedAt state or local if present
+              // Merge: server (existing) is authoritative for admin/liveInterview data
               const existing = mergedMap.get(ls.id)!;
               const mergedSession: InterviewSession = {
-                ...existing,
                 ...ls,
+                ...existing,
                 deletedAt: existing.deletedAt !== undefined ? existing.deletedAt : ls.deletedAt,
               };
+              // If server has no liveInterview, ensure it is not resurrected from local storage
+              if (!existing.liveInterview) {
+                delete mergedSession.liveInterview;
+              }
               if (ls.status === 'Completed' && existing.status !== 'Completed') {
                 mergedSession.status = 'Completed';
                 mergedSession.evaluation = ls.evaluation || existing.evaluation;
@@ -688,6 +692,26 @@ export function Dashboard({ adminToken, onBack, onLogout, onResume, onDelete, on
   const trashSessions = sessions.filter(s => !!s.deletedAt);
 
   const selectedSession = activeSessions.find(s => s.id === selectedSessionId);
+
+  const handleResetLiveInterview = (sessionId: string) => {
+    setSessions(prev => {
+      const updated = prev.map(s => {
+        if (s.id === sessionId) {
+          const copy = { ...s };
+          delete copy.liveInterview;
+          return copy;
+        }
+        return s;
+      });
+      try {
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(updated));
+      } catch (e) {
+        console.warn('Failed to update localStorage after live interview reset:', e);
+      }
+      if (onSessionsUpdated) onSessionsUpdated(updated);
+      return updated;
+    });
+  };
 
   useEffect(() => {
     if (selectedSession?.secondInterviewScores) {
@@ -2013,6 +2037,7 @@ ${t.copyContactStatus} ${effectiveStatusLabel}`;
                         adminToken={adminToken!}
                         lang={lang}
                         onStateUpdate={fetchServerSessions}
+                        onReset={() => handleResetLiveInterview(selectedSession.id)}
                         onDumpScores={(newScores) => {
                           setScores(prev => ({ ...prev, ...newScores }));
                         }}

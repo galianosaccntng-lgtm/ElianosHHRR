@@ -1870,6 +1870,17 @@ app.delete("/api/admin/sessions/:id/live-interview", async (req, res) => {
 
   session.liveInterview = null;
   await upsertSession(session);
+
+  if (firestoreClient) {
+    try {
+      await firestoreClient.collection("interviews").doc(id).update({
+        liveInterview: FieldValue.delete(),
+      });
+    } catch (e) {
+      // Ignored if handled by merge set
+    }
+  }
+
   return res.json({ success: true });
 });
 

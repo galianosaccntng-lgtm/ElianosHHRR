@@ -9,20 +9,25 @@ export function LiveInterviewPanel({
   adminToken,
   lang = 'es',
   onStateUpdate,
+  onReset,
   onDumpScores
 }: { 
   session: InterviewSession; 
   adminToken: string;
   lang?: AdminLang;
   onStateUpdate: () => void;
+  onReset?: () => void;
   onDumpScores: (scores: Record<string, number>) => void;
 }) {
   const t = adminI18n[lang];
   const guide = session.secondInterviewGuide;
   const [liveState, setLiveState] = useState(session.liveInterview);
   const liveStateRef = useRef(liveState);
+  const isResettingRef = useRef(false);
+  const [showResetModal, setShowResetModal] = useState(false);
   
   useEffect(() => {
+    if (isResettingRef.current) return;
     setLiveState(session.liveInterview);
     liveStateRef.current = session.liveInterview;
     setHasConsent(!!session.liveInterview?.consentConfirmedAt);
@@ -38,6 +43,7 @@ export function LiveInterviewPanel({
   }, [liveState?.transcript]);
 
   const updateLocalState = (newState: LiveInterviewState) => {
+    if (isResettingRef.current) return;
     setLiveState(newState);
     liveStateRef.current = newState;
   };
@@ -243,9 +249,11 @@ export function LiveInterviewPanel({
   };
 
   const analyzeChunk = async (blob: Blob) => {
+    if (isResettingRef.current) return;
     const reader = new FileReader();
     reader.readAsDataURL(blob);
     reader.onloadend = async () => {
+      if (isResettingRef.current) return;
       const base64data = reader.result as string;
       try {
         const res = await fetch(`/api/admin/sessions/${session.id}/live-interview/analyze`, {
@@ -260,8 +268,9 @@ export function LiveInterviewPanel({
             uiLanguage: lang
           })
         });
+        if (isResettingRef.current) return;
         const data = await res.json();
-        if (data.success && data.liveInterview) {
+        if (data.success && data.liveInterview && !isResettingRef.current) {
           updateLocalState(data.liveInterview);
         }
       } catch (e) {
@@ -278,14 +287,15 @@ export function LiveInterviewPanel({
 
   const [isResetting, setIsResetting] = useState(false);
 
-  const handleResetInterview = async () => {
-    if (!window.confirm(t.liveInterviewResetConfirm)) {
-      return;
-    }
+  const handleResetInterview = () => {
+    setShowResetModal(true);
+  };
 
+  const confirmResetInterview = async () => {
     setIsResetting(true);
+    isResettingRef.current = true;
     try {
-      // 1. Stop recording and release mic if active
+      // 1. Stop timers
       if (cycleTimerRef.current) {
         clearTimeout(cycleTimerRef.current);
         cycleTimerRef.current = null;
@@ -294,11 +304,17 @@ export function LiveInterviewPanel({
         clearInterval(timerRef.current);
         timerRef.current = null;
       }
-      if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
-        try {
-          mediaRecorderRef.current.stop();
-        } catch (e) {
-          console.warn("Could not stop media recorder:", e);
+
+      // 2. Disconnect and stop media recorder safely
+      if (mediaRecorderRef.current) {
+        mediaRecorderRef.current.ondataavailable = null;
+        mediaRecorderRef.current.onstop = null;
+        if (mediaRecorderRef.current.state !== 'inactive') {
+          try {
+            mediaRecorderRef.current.stop();
+          } catch (e) {
+            console.warn("Could not stop media recorder:", e);
+          }
         }
         mediaRecorderRef.current = null;
       }
@@ -307,7 +323,7 @@ export function LiveInterviewPanel({
         streamRef.current = null;
       }
 
-      // 2. Clear all local state
+      // 3. Clear all local state
       setIsRecording(false);
       setIsPaused(false);
       setTimeElapsed(0);
@@ -319,7 +335,12 @@ export function LiveInterviewPanel({
       setLiveState(undefined);
       liveStateRef.current = undefined;
 
-      // 3. Clear persisted live interview on server
+      // 4. Update parent in-memory state and localStorage immediately
+      if (onReset) {
+        onReset();
+      }
+
+      // 5. Clear persisted live interview on server
       await fetch(`/api/admin/sessions/${session.id}/live-interview`, {
         method: 'DELETE',
         headers: {
@@ -327,12 +348,18 @@ export function LiveInterviewPanel({
         }
       });
 
-      // 4. Update parent
+      // 6. Close modal
+      setShowResetModal(false);
+
+      // 7. Trigger parent refresh
       onStateUpdate();
     } catch (err) {
       console.error("Error resetting live interview:", err);
     } finally {
       setIsResetting(false);
+      setTimeout(() => {
+        isResettingRef.current = false;
+      }, 500);
     }
   };
 
@@ -568,7 +595,7 @@ export function LiveInterviewPanel({
             <p className="text-gray-600 mb-6 leading-relaxed">
               {t.liveConsentNotice}
             </p>
-            <label className="flex items-start gap-3 p-4 bg-gray-50 rounded-xl border border-gray-200 cursor-pointer mb-8 hover:bg-purple-50 transition-colors">
+            <label className="flex items-start gap-3 p-4 bg-gray-50 rounded-xl border border-gray-200 cursor-pointer mb-6 hover:bg-purple-50 transition-colors">
               <input type="checkbox" id="consentCheckbox" className="mt-1 w-5 h-5 rounded border-gray-300 text-purple-600 focus:ring-purple-500" />
               <span className="text-sm font-medium text-gray-800 leading-snug">
                 {t.liveConsentCheckLabel}
@@ -587,12 +614,67 @@ export function LiveInterviewPanel({
                   if (cb && cb.checked) {
                     handleConsent();
                   } else {
-                    alert(t.liveConsentAlert);
+                    const el = document.getElementById('consentCheckbox');
+                    if (el) el.focus();
                   }
                 }}
                 className="px-5 py-2.5 bg-purple-600 hover:bg-purple-700 text-white font-bold rounded-xl transition-colors"
               >
                 {t.liveConsentConfirmBtn}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Reset Confirmation Modal */}
+      {showResetModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm animate-in fade-in duration-150">
+          <div className="bg-white rounded-3xl p-7 max-w-md w-full shadow-2xl border-2 border-rose-200">
+            <div className="flex items-center gap-3 mb-4 text-rose-600">
+              <div className="w-11 h-11 rounded-2xl bg-rose-50 border border-rose-200/80 flex items-center justify-center shrink-0">
+                <RotateCcw className="w-5 h-5 text-rose-600" />
+              </div>
+              <div>
+                <h3 className="text-lg font-serif font-bold text-gray-900 leading-tight">
+                  {t.liveInterviewResetTitle}
+                </h3>
+                <span className="text-xs font-semibold text-rose-600 uppercase tracking-wider">
+                  Acción destructiva
+                </span>
+              </div>
+            </div>
+
+            <p className="text-sm text-gray-600 leading-relaxed mb-6 bg-rose-50/50 p-3.5 rounded-2xl border border-rose-100">
+              {t.liveInterviewResetConfirm}
+            </p>
+
+            <div className="flex justify-end gap-3">
+              <button
+                type="button"
+                onClick={() => setShowResetModal(false)}
+                disabled={isResetting}
+                className="px-4 py-2.5 text-sm font-bold text-gray-700 hover:bg-gray-100 rounded-xl transition-colors disabled:opacity-50"
+              >
+                {t.liveInterviewResetCancel}
+              </button>
+              <button
+                type="button"
+                onClick={confirmResetInterview}
+                disabled={isResetting}
+                className="flex items-center gap-2 px-5 py-2.5 text-sm font-bold text-white bg-rose-600 hover:bg-rose-700 rounded-xl transition-colors shadow-xs disabled:opacity-50"
+              >
+                {isResetting ? (
+                  <>
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                    <span>Reiniciando...</span>
+                  </>
+                ) : (
+                  <>
+                    <RotateCcw className="w-4 h-4" />
+                    <span>{t.liveInterviewResetProceed}</span>
+                  </>
+                )}
               </button>
             </div>
           </div>
