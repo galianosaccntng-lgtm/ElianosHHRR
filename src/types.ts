@@ -107,6 +107,25 @@ export interface ActiveSuggestion {
   attempt: number;
 }
 
+export interface LiveInterviewBlockEvaluation {
+  blockId: string;
+  title: string;
+  rating: number | null;
+  passed: boolean;
+  notes: string;
+}
+
+export interface LiveInterviewFinalEvaluation {
+  overallRating: number; // 1 to 5
+  recommendation: 'Hire' | 'Second Interview' | 'Do Not Hire';
+  strengths: string[];
+  concerns: string[];
+  blockSummary: LiveInterviewBlockEvaluation[];
+  narrative: string;
+  generatedAt: string;
+  language?: string;
+}
+
 export interface LiveInterviewState {
   consentConfirmedAt?: string;
   startedAt?: string;
@@ -115,6 +134,7 @@ export interface LiveInterviewState {
   blockStatus: Record<string, LiveInterviewBlockStatus>;
   suggestions: LiveInterviewSuggestion[];
   activeSuggestion?: ActiveSuggestion | null;
+  finalEvaluation?: LiveInterviewFinalEvaluation | null;
   languageNote?: string;
   updatedAt: string;
 }

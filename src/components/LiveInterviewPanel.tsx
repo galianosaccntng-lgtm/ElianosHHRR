@@ -1,8 +1,203 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { mapLiveStateToScores } from '../patch';
-import { InterviewSession, LiveInterviewState, SecondInterviewBlock } from '../types';
-import { Mic, Square, Pause, AlertCircle, Play, CheckCircle2, Circle, Loader2, RotateCcw } from 'lucide-react';
+import { InterviewSession, LiveInterviewState, SecondInterviewBlock, LiveInterviewFinalEvaluation } from '../types';
+import { Mic, Square, Pause, AlertCircle, Play, CheckCircle2, Circle, Loader2, RotateCcw, Sparkles, Copy, Check, Printer, AlertTriangle, XCircle, Star } from 'lucide-react';
 import { adminI18n, AdminLang } from '../i18n-admin';
+
+function escapeHtml(str: string): string {
+  return (str || '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#039;');
+}
+
+function formatFinalEvaluationAsText(evalData: LiveInterviewFinalEvaluation, candidateName: string, position: string, t: any): string {
+  let text = `=== ${t.liveFinalEvalTitle.toUpperCase()} ===\n`;
+  text += `${candidateName} — ${position}\n`;
+  text += `${t.liveFinalEvalGeneratedAt}: ${new Date(evalData.generatedAt).toLocaleString()}\n\n`;
+  text += `* ${t.liveFinalEvalOverallScore}: ${evalData.overallRating} / 5\n`;
+  text += `* ${t.liveFinalEvalRecommendation}: ${evalData.recommendation.toUpperCase()}\n\n`;
+
+  text += `--- ${t.liveFinalEvalNarrative.toUpperCase()} ---\n`;
+  text += `${evalData.narrative}\n\n`;
+
+  text += `--- ${t.liveFinalEvalStrengths.toUpperCase()} ---\n`;
+  evalData.strengths.forEach((s) => { text += `• ${s}\n`; });
+  text += `\n`;
+
+  text += `--- ${t.liveFinalEvalConcerns.toUpperCase()} ---\n`;
+  evalData.concerns.forEach((c) => { text += `• ${c}\n`; });
+  text += `\n`;
+
+  text += `--- ${t.liveFinalEvalBlockBreakdown.toUpperCase()} ---\n`;
+  evalData.blockSummary.forEach((b) => {
+    const status = b.passed ? t.liveFinalEvalPassedBadge : t.liveFinalEvalNotPassedBadge;
+    const rating = b.rating ? `${b.rating}/5` : '—';
+    text += `[${status}] ${b.title} (${rating}): ${b.notes}\n`;
+  });
+  text += `\n`;
+
+  text += `[${t.liveFinalEvalDisclaimer}]\n`;
+  return text;
+}
+
+function generatePrintableFinalEvaluationHtml(
+  evalData: LiveInterviewFinalEvaluation,
+  candidateName: string,
+  position: string,
+  t: any
+): string {
+  const recColors: Record<string, { bg: string; text: string; border: string }> = {
+    'Hire': { bg: '#ecfdf5', text: '#065f46', border: '#a7f3d0' },
+    'Second Interview': { bg: '#fffbeb', text: '#92400e', border: '#fde68a' },
+    'Do Not Hire': { bg: '#fff1f2', text: '#9f1239', border: '#fecdd3' }
+  };
+  const color = recColors[evalData.recommendation] || recColors['Second Interview'];
+
+  return `<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>${escapeHtml(t.liveFinalEvalTitle)} - ${escapeHtml(candidateName)}</title>
+  <style>
+    @media print {
+      body { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+    }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      line-height: 1.5;
+      color: #1e293b;
+      margin: 24px;
+      font-size: 13px;
+    }
+    .header {
+      border-bottom: 2px solid #e2e8f0;
+      padding-bottom: 16px;
+      margin-bottom: 20px;
+    }
+    .brand { font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em; color: #4338ca; }
+    h1 { margin: 4px 0 8px 0; font-size: 22px; color: #0f172a; }
+    .meta { font-size: 12px; color: #64748b; }
+    .badges {
+      display: flex;
+      gap: 16px;
+      margin: 16px 0;
+    }
+    .rec-box {
+      background: ${color.bg};
+      color: ${color.text};
+      border: 1px solid ${color.border};
+      padding: 10px 16px;
+      border-radius: 10px;
+      font-weight: 700;
+      font-size: 14px;
+    }
+    .score-box {
+      background: #f8fafc;
+      border: 1px solid #e2e8f0;
+      padding: 10px 16px;
+      border-radius: 10px;
+      font-weight: 700;
+      font-size: 14px;
+    }
+    h2 {
+      font-size: 14px;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      color: #334155;
+      margin-top: 20px;
+      margin-bottom: 8px;
+      border-bottom: 1px solid #f1f5f9;
+      padding-bottom: 4px;
+    }
+    ul { margin: 4px 0 16px 20px; padding: 0; }
+    li { margin-bottom: 4px; }
+    .block-table {
+      width: 100%;
+      border-collapse: collapse;
+      margin: 12px 0 20px 0;
+    }
+    .block-table th, .block-table td {
+      border: 1px solid #e2e8f0;
+      padding: 8px 10px;
+      text-align: left;
+      font-size: 12px;
+    }
+    .block-table th { background: #f8fafc; font-weight: 600; }
+    .narrative {
+      background: #f8fafc;
+      border-left: 4px solid #4338ca;
+      padding: 12px 16px;
+      border-radius: 0 8px 8px 0;
+      font-size: 13px;
+      line-height: 1.6;
+      margin-bottom: 20px;
+    }
+    .disclaimer {
+      font-size: 11px;
+      color: #94a3b8;
+      border-top: 1px solid #e2e8f0;
+      padding-top: 10px;
+      margin-top: 24px;
+      font-style: italic;
+    }
+  </style>
+</head>
+<body>
+  <div class="header">
+    <div class="brand">Ellianos Coffee — Lehigh Acres, FL</div>
+    <h1>${escapeHtml(t.liveFinalEvalTitle)}</h1>
+    <div class="meta">
+      <strong>${escapeHtml(candidateName)}</strong> · ${escapeHtml(position)} · ${escapeHtml(t.liveFinalEvalGeneratedAt)}: ${new Date(evalData.generatedAt).toLocaleString()}
+    </div>
+  </div>
+
+  <div class="badges">
+    <div class="rec-box">${escapeHtml(t.liveFinalEvalRecommendation)}: ${escapeHtml(evalData.recommendation)}</div>
+    <div class="score-box">${escapeHtml(t.liveFinalEvalOverallScore)}: ${evalData.overallRating} / 5</div>
+  </div>
+
+  <h2>${escapeHtml(t.liveFinalEvalNarrative)}</h2>
+  <div class="narrative">${escapeHtml(evalData.narrative)}</div>
+
+  <h2>${escapeHtml(t.liveFinalEvalStrengths)}</h2>
+  <ul>
+    ${evalData.strengths.map(s => `<li>${escapeHtml(s)}</li>`).join('')}
+  </ul>
+
+  <h2>${escapeHtml(t.liveFinalEvalConcerns)}</h2>
+  <ul>
+    ${evalData.concerns.map(c => `<li>${escapeHtml(c)}</li>`).join('')}
+  </ul>
+
+  <h2>${escapeHtml(t.liveFinalEvalBlockBreakdown)}</h2>
+  <table class="block-table">
+    <thead>
+      <tr>
+        <th>Bloque</th>
+        <th>Estado</th>
+        <th>Calificación</th>
+        <th>Notas</th>
+      </tr>
+    </thead>
+    <tbody>
+      ${evalData.blockSummary.map(b => `
+        <tr>
+          <td><strong>${escapeHtml(b.title)}</strong></td>
+          <td>${b.passed ? '<span style="color:#059669;font-weight:600;">' + escapeHtml(t.liveFinalEvalPassedBadge) + '</span>' : '<span style="color:#e11d48;font-weight:600;">' + escapeHtml(t.liveFinalEvalNotPassedBadge) + '</span>'}</td>
+          <td>${b.rating ? b.rating + '/5' : '—'}</td>
+          <td>${escapeHtml(b.notes)}</td>
+        </tr>
+      `).join('')}
+    </tbody>
+  </table>
+
+  <div class="disclaimer">${escapeHtml(t.liveFinalEvalDisclaimer)}</div>
+</body>
+</html>`;
+}
 
 export function LiveInterviewPanel({ 
   session, 
@@ -27,6 +222,86 @@ export function LiveInterviewPanel({
   const [showResetModal, setShowResetModal] = useState(false);
   const [justChanged, setJustChanged] = useState(false);
   const prevQuestionRef = useRef<string | null>(null);
+
+  const [isGeneratingFinalEval, setIsGeneratingFinalEval] = useState(false);
+  const [copiedFinalEval, setCopiedFinalEval] = useState(false);
+  const [finalEvalError, setFinalEvalError] = useState<string | null>(null);
+
+  const handleGenerateFinalEvaluation = async () => {
+    const transcriptText = liveState?.transcript?.trim();
+    if (!transcriptText) {
+      alert(t.liveFinalEvalNoTranscriptAlert);
+      return;
+    }
+
+    if (liveState?.finalEvaluation) {
+      const confirmed = window.confirm(t.liveFinalEvalRegenerateConfirm);
+      if (!confirmed) return;
+    }
+
+    setIsGeneratingFinalEval(true);
+    setFinalEvalError(null);
+
+    try {
+      const res = await fetch(`/api/admin/sessions/${session.id}/live-interview/final-evaluation`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-admin-passcode': adminToken
+        },
+        body: JSON.stringify({ uiLanguage: lang })
+      });
+
+      const data = await res.json();
+      if (!res.ok || !data.success) {
+        throw new Error(data.error || t.liveFinalEvalError);
+      }
+
+      if (data.finalEvaluation) {
+        const updatedLiveState = {
+          ...(liveStateRef.current || { blockStatus: {}, suggestions: [], transcript: '' }),
+          finalEvaluation: data.finalEvaluation,
+          updatedAt: new Date().toISOString()
+        };
+        setLiveState(updatedLiveState);
+        liveStateRef.current = updatedLiveState;
+        onStateUpdate();
+      }
+    } catch (err: any) {
+      console.error("Error generating final evaluation:", err);
+      setFinalEvalError(err.message || t.liveFinalEvalError);
+    } finally {
+      setIsGeneratingFinalEval(false);
+    }
+  };
+
+  const handleCopyFinalEvaluation = () => {
+    if (!liveState?.finalEvaluation) return;
+    const candidateName = session.candidateInfo?.name || t.unnamedApplicant || 'Candidate';
+    const candidatePosition = session.position || 'Barista';
+    const text = formatFinalEvaluationAsText(liveState.finalEvaluation, candidateName, candidatePosition, t);
+    navigator.clipboard.writeText(text);
+    setCopiedFinalEval(true);
+    setTimeout(() => setCopiedFinalEval(false), 2000);
+  };
+
+  const handlePrintFinalEvaluation = () => {
+    if (!liveState?.finalEvaluation) return;
+    const candidateName = session.candidateInfo?.name || t.unnamedApplicant || 'Candidate';
+    const candidatePosition = session.position || 'Barista';
+    const htmlContent = generatePrintableFinalEvaluationHtml(liveState.finalEvaluation, candidateName, candidatePosition, t);
+
+    const printWindow = window.open('', '_blank');
+    if (printWindow) {
+      printWindow.document.open();
+      printWindow.document.write(htmlContent);
+      printWindow.document.close();
+      printWindow.focus();
+      setTimeout(() => {
+        printWindow.print();
+      }, 350);
+    }
+  };
 
   useEffect(() => {
     const currentQ = liveState?.activeSuggestion?.exactQuestion;
@@ -387,6 +662,8 @@ export function LiveInterviewPanel({
     (liveState?.blockStatus && Object.keys(liveState.blockStatus).length > 0) ||
     !!session.liveInterview;
 
+  const hasTranscript = !!liveState?.transcript?.trim();
+
   if (!guide) return null;
 
   return (
@@ -401,7 +678,7 @@ export function LiveInterviewPanel({
           <p className="text-sm text-purple-700/80 font-medium">{t.liveInterviewSubtitle}</p>
         </div>
         
-        <div className="flex items-center gap-3">
+        <div className="flex items-center gap-3 flex-wrap">
           {(!liveState?.endedAt) ? (
             !isRecording ? (
               <button 
@@ -447,6 +724,32 @@ export function LiveInterviewPanel({
               </button>
             </div>
           )}
+
+          {/* AI Final Evaluation Button */}
+          <button
+            onClick={handleGenerateFinalEvaluation}
+            disabled={isGeneratingFinalEval}
+            className={`flex items-center gap-1.5 px-3.5 py-2 rounded-xl text-xs font-bold transition-all shadow-xs ${
+              !hasTranscript
+                ? 'bg-purple-100/70 text-purple-400 hover:bg-purple-100 border border-purple-200/60'
+                : liveState?.finalEvaluation
+                  ? 'bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border border-indigo-200'
+                  : 'bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-700 hover:to-indigo-700 text-white shadow-purple-500/20'
+            }`}
+            title={!hasTranscript ? t.liveFinalEvalNoTranscriptAlert : (liveState?.finalEvaluation ? t.liveFinalEvalRegenerateBtn : t.liveFinalEvalBtn)}
+          >
+            {isGeneratingFinalEval ? (
+              <>
+                <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                <span>{t.liveFinalEvalGenerating}</span>
+              </>
+            ) : (
+              <>
+                <Sparkles className="w-3.5 h-3.5 text-current" />
+                <span>{liveState?.finalEvaluation ? t.liveFinalEvalRegenerateBtn : t.liveFinalEvalBtn}</span>
+              </>
+            )}
+          </button>
 
           {hasLiveContent && (
             <button
@@ -717,6 +1020,272 @@ export function LiveInterviewPanel({
              </div>
           </div>
 
+        </div>
+      )}
+
+      {/* Loading state for final evaluation */}
+      {isGeneratingFinalEval && (
+        <div className="mt-6 p-6 rounded-3xl bg-gradient-to-r from-purple-50 via-indigo-50 to-purple-50 border-2 border-indigo-200 flex flex-col items-center justify-center text-center animate-pulse relative z-10 shadow-sm">
+          <Loader2 className="w-8 h-8 text-indigo-600 animate-spin mb-3" />
+          <h4 className="font-bold text-indigo-950 text-base">{t.liveFinalEvalGenerating}</h4>
+          <p className="text-xs text-indigo-700/90 mt-1 max-w-md">
+            {t.liveFinalEvalSubtitle}
+          </p>
+        </div>
+      )}
+
+      {/* Error state */}
+      {finalEvalError && !isGeneratingFinalEval && (
+        <div className="mt-6 p-4 rounded-2xl bg-rose-50 border border-rose-200 text-rose-800 text-sm flex items-start justify-between gap-3 relative z-10">
+          <div className="flex items-start gap-2">
+            <AlertCircle className="w-5 h-5 text-rose-600 shrink-0 mt-0.5" />
+            <div>
+              <p className="font-bold">{t.liveFinalEvalError}</p>
+              <p className="text-xs text-rose-700 mt-0.5">{finalEvalError}</p>
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={handleGenerateFinalEvaluation}
+            className="px-3 py-1.5 bg-rose-600 text-white font-bold rounded-xl text-xs hover:bg-rose-700 transition-colors shrink-0 shadow-xs"
+          >
+            {t.liveFinalEvalRegenerateBtn}
+          </button>
+        </div>
+      )}
+
+      {/* Display Final Evaluation Card */}
+      {liveState?.finalEvaluation && !isGeneratingFinalEval && (
+        <div className="mt-8 bg-gradient-to-b from-white to-slate-50 border-2 border-indigo-200 rounded-3xl p-6 md:p-8 shadow-md relative z-10">
+          {/* Card Top / Header */}
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-6 border-b border-indigo-100">
+            <div>
+              <div className="flex items-center gap-2 mb-1">
+                <span className="p-1.5 bg-indigo-100 text-indigo-700 rounded-lg">
+                  <Sparkles className="w-4 h-4" />
+                </span>
+                <h4 className="text-lg md:text-xl font-serif font-bold text-indigo-950">
+                  {t.liveFinalEvalTitle}
+                </h4>
+              </div>
+              <p className="text-xs text-indigo-700/80 font-medium">
+                {t.liveFinalEvalSubtitle}
+              </p>
+              <span className="inline-block mt-1 text-[11px] text-slate-500 font-medium">
+                {t.liveFinalEvalGeneratedAt} {new Date(liveState.finalEvaluation.generatedAt).toLocaleString()}
+              </span>
+            </div>
+
+            <div className="flex items-center gap-2 flex-wrap">
+              <button
+                type="button"
+                onClick={handleCopyFinalEvaluation}
+                className="flex items-center gap-1.5 px-3.5 py-2 bg-white hover:bg-slate-50 text-slate-700 border border-slate-200 rounded-xl text-xs font-bold transition-colors shadow-xs cursor-pointer"
+                title={t.liveFinalEvalCopyBtn}
+              >
+                {copiedFinalEval ? (
+                  <>
+                    <Check className="w-3.5 h-3.5 text-emerald-600" />
+                    <span className="text-emerald-700 font-bold">{t.liveFinalEvalCopied}</span>
+                  </>
+                ) : (
+                  <>
+                    <Copy className="w-3.5 h-3.5 text-slate-500" />
+                    <span>{t.liveFinalEvalCopyBtn}</span>
+                  </>
+                )}
+              </button>
+
+              <button
+                type="button"
+                onClick={handlePrintFinalEvaluation}
+                className="flex items-center gap-1.5 px-3.5 py-2 bg-white hover:bg-slate-50 text-slate-700 border border-slate-200 rounded-xl text-xs font-bold transition-colors shadow-xs cursor-pointer"
+                title={t.liveFinalEvalPrintBtn}
+              >
+                <Printer className="w-3.5 h-3.5 text-slate-500" />
+                <span>{t.liveFinalEvalPrintBtn}</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={handleGenerateFinalEvaluation}
+                disabled={isGeneratingFinalEval}
+                className="flex items-center gap-1.5 px-3.5 py-2 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border border-indigo-200 rounded-xl text-xs font-bold transition-colors shadow-xs disabled:opacity-50 cursor-pointer"
+                title={t.liveFinalEvalRegenerateBtn}
+              >
+                <RotateCcw className="w-3.5 h-3.5" />
+                <span>{t.liveFinalEvalRegenerateBtn}</span>
+              </button>
+            </div>
+          </div>
+
+          {/* Metric Badges (Overall Score & Recommendation) */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 my-6">
+            {/* Overall Rating */}
+            <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-xs flex items-center justify-between">
+              <div>
+                <span className="text-xs font-bold uppercase tracking-wider text-slate-500 block mb-1">
+                  {t.liveFinalEvalOverallScore}
+                </span>
+                <div className="flex items-baseline gap-2">
+                  <span className="text-3xl font-black text-slate-900 leading-none">
+                    {liveState.finalEvaluation.overallRating}
+                  </span>
+                  <span className="text-sm font-bold text-slate-400">/ 5</span>
+                </div>
+              </div>
+              <div className="flex gap-1">
+                {[1, 2, 3, 4, 5].map((star) => (
+                  <Star
+                    key={star}
+                    className={`w-5 h-5 ${
+                      star <= liveState.finalEvaluation!.overallRating
+                        ? 'text-amber-400 fill-amber-400'
+                        : 'text-slate-200 fill-slate-100'
+                    }`}
+                  />
+                ))}
+              </div>
+            </div>
+
+            {/* Recommendation */}
+            {(() => {
+              const rec = liveState.finalEvaluation.recommendation;
+              let bg = 'bg-slate-50 text-slate-800 border-slate-200';
+              let icon = <CheckCircle2 className="w-6 h-6 text-slate-600" />;
+
+              if (rec === 'Hire') {
+                bg = 'bg-emerald-50 text-emerald-900 border-emerald-300';
+                icon = <CheckCircle2 className="w-6 h-6 text-emerald-600" />;
+              } else if (rec === 'Second Interview') {
+                bg = 'bg-amber-50 text-amber-900 border-amber-300';
+                icon = <AlertCircle className="w-6 h-6 text-amber-600" />;
+              } else if (rec === 'Do Not Hire') {
+                bg = 'bg-rose-50 text-rose-900 border-rose-300';
+                icon = <XCircle className="w-6 h-6 text-rose-600" />;
+              }
+
+              return (
+                <div className={`p-4 rounded-2xl border shadow-xs flex items-center justify-between ${bg}`}>
+                  <div>
+                    <span className="text-xs font-bold uppercase tracking-wider opacity-75 block mb-1">
+                      {t.liveFinalEvalRecommendation}
+                    </span>
+                    <span className="text-xl font-bold tracking-tight">
+                      {rec === 'Hire'
+                        ? (lang === 'en' ? 'Hire' : 'Contratar')
+                        : rec === 'Second Interview'
+                          ? (lang === 'en' ? 'Second Interview' : 'Segunda Conversación')
+                          : (lang === 'en' ? 'Do Not Hire' : 'No Contratar')}
+                    </span>
+                  </div>
+                  <div>{icon}</div>
+                </div>
+              );
+            })()}
+          </div>
+
+          {/* Narrative / Executive Summary */}
+          {liveState.finalEvaluation.narrative && (
+            <div className="mb-6 p-5 rounded-2xl bg-white border border-slate-200 shadow-xs">
+              <h5 className="text-xs font-bold uppercase tracking-wider text-slate-500 mb-2">
+                {t.liveFinalEvalNarrative}
+              </h5>
+              <p className="text-sm text-slate-800 leading-relaxed font-normal whitespace-pre-line">
+                {liveState.finalEvaluation.narrative}
+              </p>
+            </div>
+          )}
+
+          {/* Strengths & Concerns Grid */}
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
+            {/* Strengths */}
+            <div className="p-5 rounded-2xl bg-emerald-50/50 border border-emerald-200 shadow-xs">
+              <h5 className="text-xs font-bold uppercase tracking-wider text-emerald-900 flex items-center gap-1.5 mb-3">
+                <CheckCircle2 className="w-4 h-4 text-emerald-600" />
+                <span>{t.liveFinalEvalStrengths}</span>
+              </h5>
+              {liveState.finalEvaluation.strengths.length > 0 ? (
+                <ul className="space-y-2">
+                  {liveState.finalEvaluation.strengths.map((st, idx) => (
+                    <li key={idx} className="text-xs text-emerald-950 flex items-start gap-2 leading-relaxed">
+                      <span className="w-1.5 h-1.5 rounded-full bg-emerald-600 shrink-0 mt-1.5"></span>
+                      <span>{st}</span>
+                    </li>
+                  ))}
+                </ul>
+              ) : (
+                <p className="text-xs text-slate-400 italic">—</p>
+              )}
+            </div>
+
+            {/* Concerns */}
+            <div className="p-5 rounded-2xl bg-amber-50/50 border border-amber-200 shadow-xs">
+              <h5 className="text-xs font-bold uppercase tracking-wider text-amber-900 flex items-center gap-1.5 mb-3">
+                <AlertTriangle className="w-4 h-4 text-amber-600" />
+                <span>{t.liveFinalEvalConcerns}</span>
+              </h5>
+              {liveState.finalEvaluation.concerns.length > 0 ? (
+                <ul className="space-y-2">
+                  {liveState.finalEvaluation.concerns.map((co, idx) => (
+                    <li key={idx} className="text-xs text-amber-950 flex items-start gap-2 leading-relaxed">
+                      <span className="w-1.5 h-1.5 rounded-full bg-amber-600 shrink-0 mt-1.5"></span>
+                      <span>{co}</span>
+                    </li>
+                  ))}
+                </ul>
+              ) : (
+                <p className="text-xs text-slate-400 italic">—</p>
+              )}
+            </div>
+          </div>
+
+          {/* Block Breakdown */}
+          {liveState.finalEvaluation.blockSummary.length > 0 && (
+            <div className="mb-6 p-5 rounded-2xl bg-white border border-slate-200 shadow-xs">
+              <h5 className="text-xs font-bold uppercase tracking-wider text-slate-500 mb-3">
+                {t.liveFinalEvalBlockBreakdown}
+              </h5>
+              <div className="space-y-2.5">
+                {liveState.finalEvaluation.blockSummary.map((b) => (
+                  <div
+                    key={b.blockId}
+                    className="p-3.5 rounded-xl border border-slate-100 bg-slate-50/50 hover:bg-slate-50 transition-colors flex flex-col sm:flex-row sm:items-start justify-between gap-2"
+                  >
+                    <div className="flex-1">
+                      <div className="flex items-center gap-2 flex-wrap mb-1">
+                        <span className="font-bold text-xs text-slate-900">{b.title}</span>
+                        <span
+                          className={`text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-md ${
+                            b.passed
+                              ? 'bg-emerald-100 text-emerald-800'
+                              : 'bg-rose-100 text-rose-800'
+                          }`}
+                        >
+                          {b.passed ? t.liveFinalEvalPassedBadge : t.liveFinalEvalNotPassedBadge}
+                        </span>
+                      </div>
+                      <p className="text-xs text-slate-600 leading-relaxed font-medium">
+                        {b.notes}
+                      </p>
+                    </div>
+                    {b.rating && (
+                      <div className="shrink-0 flex items-center gap-1 self-start px-2 py-1 bg-white rounded-lg border border-slate-200 text-xs font-bold text-slate-700">
+                        <Star className="w-3.5 h-3.5 text-amber-500 fill-amber-400" />
+                        <span>{b.rating}/5</span>
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Human Decision Disclaimer */}
+          <div className="pt-4 border-t border-slate-200/80 flex items-center gap-2 text-xs text-slate-500 italic">
+            <AlertCircle className="w-4 h-4 shrink-0 text-slate-400" />
+            <span>{t.liveFinalEvalDisclaimer}</span>
+          </div>
         </div>
       )}
 

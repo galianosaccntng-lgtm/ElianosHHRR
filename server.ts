@@ -88,6 +88,7 @@ const findIncompleteLimiter = createRateLimiter(15 * 60 * 1000, 10, "Too many se
 const adminOnboardingLimiter = createRateLimiter(60 * 60 * 1000, 10, "Too many onboarding invites sent. Please try again later (maximum 10 per hour).");
 const liveInterviewAnalyzeLimiter = createRateLimiter(60 * 60 * 1000, 400, "Too many live interview analyze requests. Please try again later (maximum 120 per hour).");
 const liveInterviewProbeLimiter = createRateLimiter(60 * 60 * 1000, 60, "Too many probe question requests. Please try again later.");
+const liveInterviewFinalEvalLimiter = createRateLimiter(60 * 60 * 1000, 20, "Too many final evaluation requests. Please try again later (maximum 20 per hour).");
 
 // Centralized admin authentication verification helper
 function verifyAdminAccess(provided: string | undefined, res: express.Response): boolean {
@@ -830,7 +831,15 @@ app.post("/api/sessions/find-incomplete", findIncompleteLimiter, async (req, res
       return res.json({ found: false });
     }
 
-    return res.json({ found: true, session });
+    const {
+      secondInterviewGuide: _g,
+      secondInterviewScores: _s,
+      onboarding: _o,
+      liveInterview: _li,
+      ...safeSession
+    } = session;
+
+    return res.json({ found: true, session: safeSession });
   } catch (err: any) {
     console.error("[FindIncomplete] Error:", err);
     return res.json({ found: false });
@@ -2074,6 +2083,198 @@ Return a strict JSON object:
   } catch (error: any) {
     console.error("Probe questions error", error);
     return res.status(500).json({ error: "Failed to generate probe questions" });
+  }
+});
+
+// Comprehensive AI Final Evaluation Endpoint
+app.post("/api/admin/sessions/:id/live-interview/final-evaluation", liveInterviewFinalEvalLimiter, async (req, res) => {
+  const authHeader = req.headers["x-admin-passcode"] as string | undefined;
+  if (!verifyAdminAccess(authHeader, res)) return;
+
+  const { id } = req.params;
+  const { uiLanguage } = req.body || {};
+  const langName = uiLanguage === 'en' ? 'English' : 'Spanish';
+
+  // Read session by direct document lookup with local fallback
+  let session: any = null;
+  if (firestoreClient) {
+    try {
+      const docSnap = await firestoreClient.collection("interviews").doc(id).get();
+      if (docSnap.exists) {
+        session = docSnap.data();
+      }
+    } catch (fsErr) {
+      handleFirestoreError('Final Evaluation Firestore error', fsErr);
+    }
+  }
+  if (!session) {
+    const sessions = getLocalSessions();
+    session = sessions.find((s: any) => s.id === id);
+  }
+  if (!session) {
+    return res.status(404).json({ success: false, error: uiLanguage === 'en' ? "Session not found" : "Sesión no encontrada" });
+  }
+
+  const transcript = session.liveInterview?.transcript?.trim();
+  if (!transcript) {
+    return res.status(400).json({
+      success: false,
+      error: uiLanguage === 'en'
+        ? "No interview transcript recorded yet. Please conduct or record the interview conversation before generating a final evaluation."
+        : "Aún no hay transcripción de entrevista registrada. Primero debe haber conversación registrada antes de generar la evaluación final."
+    });
+  }
+
+  const guide = session.secondInterviewGuide;
+  if (!guide) {
+    return res.status(400).json({
+      success: false,
+      error: uiLanguage === 'en'
+        ? "No second interview guide found for this session."
+        : "No se encontró la guía de segunda entrevista para esta sesión."
+    });
+  }
+
+  const blockStatus = session.liveInterview?.blockStatus || {};
+  const candidateName = session.candidateInfo?.name || (uiLanguage === 'en' ? "Candidate" : "Candidato");
+  const position = session.position || "Barista";
+
+  try {
+    const prompt = `You are a Senior HR and Hiring Director at Ellianos Coffee conducting an in-depth, definitive final evaluation of candidate ${candidateName} for the ${position} position at our brand-new Lehigh Acres, FL location.
+
+You must analyze the ENTIRE transcript of the live interview, the interview guide blocks (including must-pass criteria, listen-for signals, red flags, and decision criteria), and the accumulated block status and live ratings.
+
+COMPANY CONTEXT:
+Ellianos Coffee operates 800 sq ft double-drive-thru kiosks with high customer speed ("Italian Quality at America's Pace"), tight physical spaces, 4-6 people per shift, early morning openings (from 4:30 AM), and opening in Lehigh Acres in October.
+
+CANDIDATE & ROLE:
+- Name: ${candidateName}
+- Position: ${position}
+
+INTERVIEW GUIDE BLOCKS:
+${JSON.stringify((guide.blocks || []).map((b: any) => ({
+  id: b.id,
+  title: b.title,
+  goal: b.goal,
+  mustPass: b.mustPass,
+  listenFor: b.listenFor,
+  redFlags: b.redFlags
+})), null, 2)}
+
+DECISION CRITERIA FROM GUIDE:
+${JSON.stringify(guide.decision || {}, null, 2)}
+
+ACCUMULATED BLOCK STATUS & LIVE RATINGS:
+${JSON.stringify(blockStatus, null, 2)}
+
+FULL LIVE INTERVIEW TRANSCRIPT:
+${transcript}
+
+CRITICAL RULES & GUIDELINES:
+1. OUTPUT LANGUAGE — ABSOLUTE MANDATE:
+   Write EVERY SINGLE text field (strengths, concerns, narrative, blockSummary notes and titles) in ${langName} ONLY.
+   Even if parts of the transcript or the entire interview were spoken in the other language, your evaluation analysis MUST be written in ${langName}.
+2. HUMAN ASSISTANCE NOTICE:
+   This evaluation is an ASSISTANCE tool for human hiring decision-makers. It is NOT an automatic binding verdict.
+3. LANGUAGE FAIRNESS:
+   NEVER penalize the candidate simply for being a non-native speaker, speaking broken English, having an accent, or speaking Spanish. Evaluate strictly on their demonstrated operational competence, customer service attitude, availability, teamwork, honesty, and reliability.
+4. EVIDENCE-BASED:
+   Base all strengths and concerns directly on concrete statements or actions from the transcript. Cite or quote key parts of the transcript where relevant.
+5. RECOMMENDATION:
+   Must be strictly one of: "Hire" | "Second Interview" | "Do Not Hire".
+   - "Hire": Meets or exceeds core requirements, passes all Must-Pass blocks, demonstrated good attitude, availability, and teamwork.
+   - "Second Interview": Intermediate performance, promising candidate but with specific doubts, or needs a follow-up conversation with higher management.
+   - "Do Not Hire": Failed one or more critical Must-Pass blocks (e.g. unresolvable schedule conflict, serious operational red flags, severe lack of honesty or hostility).
+6. OVERALL RATING:
+   An integer from 1 to 5:
+   - 1: Deficient / Unsatisfactory
+   - 2: Below Expectations / High Risk
+   - 3: Meets Expectations / Acceptable
+   - 4: Exceeds Expectations / Strong Candidate
+   - 5: Outstanding / Exceptional Candidate
+
+Return a strict JSON object with this exact structure:
+{
+  "overallRating": 1 | 2 | 3 | 4 | 5,
+  "recommendation": "Hire" | "Second Interview" | "Do Not Hire",
+  "strengths": [
+    "Concrete strength citing specific transcript evidence in ${langName}",
+    "..."
+  ],
+  "concerns": [
+    "Concrete concern or risk area citing evidence or gaps from transcript in ${langName}",
+    "..."
+  ],
+  "blockSummary": [
+    {
+      "blockId": "id_of_block",
+      "title": "Block title in ${langName}",
+      "rating": 1 | 2 | 3 | 4 | 5 | null,
+      "passed": true | false,
+      "notes": "1-2 concise sentences summarizing the candidate's performance on this block in ${langName}"
+    }
+  ],
+  "narrative": "1-2 comprehensive executive summary paragraphs in ${langName} providing an overarching assessment of the candidate, their cultural and operational fit for Ellianos Coffee, and the rationale behind the recommendation."
+}`;
+
+    const response = await generateContentWithInfiniteResilience({
+      contents: prompt,
+      config: {
+        responseMimeType: "application/json",
+        temperature: 0.2,
+      },
+      timeoutMs: 40000,
+    });
+
+    const rawText = response?.text || "";
+    if (!rawText) throw new Error("Empty response from Gemini");
+
+    const cleanedText = rawText.replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/i, "").trim();
+    const aiResult = JSON.parse(cleanedText);
+
+    // Sanitize and validate final evaluation payload
+    const finalEvaluation = {
+      overallRating: Math.max(1, Math.min(5, Math.round(Number(aiResult.overallRating) || 3))),
+      recommendation: (['Hire', 'Second Interview', 'Do Not Hire'].includes(aiResult.recommendation)
+        ? aiResult.recommendation
+        : 'Second Interview'),
+      strengths: Array.isArray(aiResult.strengths) ? aiResult.strengths.map(String) : [],
+      concerns: Array.isArray(aiResult.concerns) ? aiResult.concerns.map(String) : [],
+      blockSummary: Array.isArray(aiResult.blockSummary)
+        ? aiResult.blockSummary.map((b: any) => ({
+            blockId: String(b.blockId || ''),
+            title: String(b.title || ''),
+            rating: typeof b.rating === 'number' && !isNaN(b.rating) ? Math.max(1, Math.min(5, Math.round(b.rating))) : null,
+            passed: Boolean(b.passed),
+            notes: String(b.notes || '')
+          }))
+        : (guide.blocks || []).map((b: any) => ({
+            blockId: b.id,
+            title: b.title,
+            rating: blockStatus[b.id]?.liveRating || null,
+            passed: blockStatus[b.id]?.status === 'covered' && (blockStatus[b.id]?.liveRating || 0) >= 3,
+            notes: blockStatus[b.id]?.reasoning || ''
+          })),
+      narrative: String(aiResult.narrative || ''),
+      generatedAt: new Date().toISOString(),
+      language: uiLanguage || 'es'
+    };
+
+    // Store in session
+    session.liveInterview = {
+      ...(session.liveInterview || { blockStatus: {}, suggestions: [], transcript: '' }),
+      finalEvaluation,
+      updatedAt: new Date().toISOString()
+    };
+
+    await upsertSession(session);
+    return res.json({ success: true, finalEvaluation });
+  } catch (err: any) {
+    console.error("[LiveInterviewFinalEval] Error generating evaluation:", err);
+    return res.status(500).json({
+      success: false,
+      error: err.message || (uiLanguage === 'en' ? "Failed to generate final evaluation" : "Error al generar la evaluación final")
+    });
   }
 });
 
