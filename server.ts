@@ -1728,17 +1728,20 @@ app.post("/api/admin/sessions/:id/live-interview/analyze", liveInterviewAnalyzeL
   try {
     const audioBuffer = Buffer.from(audioData.split(',')[1] || audioData, 'base64');
     
+    const currentBlockStatus = session.liveInterview?.blockStatus || accumulatedBlockStatus || {};
+    const priorTranscript = session.liveInterview?.transcript || accumulatedTranscript || '';
+
     // Construct the prompt for Gemini
     const systemPrompt = `You are an AI assistant for a human interviewer conducting a live bilingual (English/Spanish) job interview.
 You are receiving a short audio segment of the ongoing interview.
-Your task is to transcribe the audio and analyze how it maps to the interview guide blocks.
+Your task is to transcribe the audio, map progress against the interview guide blocks, and provide the EXACT LITERAL QUESTION for the interviewer to speak next.
 
 IMPORTANT RULES:
-1. This is ASISTANCE for the human, NOT a final verdict. NEVER reject the candidate.
+1. This is ASSISTANCE for the human, NOT a final verdict. NEVER reject the candidate.
 2. The order of the conversation may NOT follow the guide order. Map whatever is said to the relevant block(s).
 3. The conversation may switch between English and Spanish frequently. Handle both natively.
 4. Non-native speakers using formal/broken language is NOT a red flag by itself.
-5. OUTPUT LANGUAGE — CRITICAL: Write EVERY analysis field — evidence, reasoning, gaps, suggestions.text, and languageNote — in ${langName} ONLY, no matter what language the candidate or interviewer speaks. Even if the entire interview is in Spanish, your analysis MUST be written in ${langName}. The ONLY field that keeps the original spoken language is transcriptSegment (never translate the transcript). Do not mix languages in the analysis fields.
+5. OUTPUT LANGUAGE — CRITICAL: Write EVERY analysis field — evidence, reasoning, gaps, suggestions.text, suggestions.exactQuestion, and languageNote — in ${langName} ONLY, no matter what language the candidate or interviewer speaks. Even if the entire interview is in Spanish, your analysis MUST be written in ${langName}. The ONLY field that keeps the original spoken language is transcriptSegment (never translate the transcript). Do not mix languages in the analysis fields.
 
 Interview Guide Blocks:
 ${JSON.stringify(session.secondInterviewGuide.blocks.map(b => ({
@@ -1748,10 +1751,52 @@ ${JSON.stringify(session.secondInterviewGuide.blocks.map(b => ({
   mustPass: b.mustPass,
   listenFor: session.secondInterviewGuide?.questions.find(q => q.block === b.title)?.listenFor || [],
   redFlags: session.secondInterviewGuide?.questions.find(q => q.block === b.title)?.redFlags || []
-}))) }
+})))}
 
-Accumulated Block Status so far (do NOT regress a block from 'covered' unless explicitly contradicted, just add confidence/evidence):
-${JSON.stringify(accumulatedBlockStatus || {})}
+Accumulated Block Status so far (probeAttempts and settled state):
+${JSON.stringify(currentBlockStatus)}
+
+Recent Full Transcript so far (verify what has already been asked to avoid repetitions):
+${priorTranscript ? (priorTranscript.length > 3500 ? priorTranscript.slice(-3500) : priorTranscript) : '(Interview just started)'}
+
+============================================================
+SUGGESTIONS & QUESTION RULES (FOLLOW STRICTLY):
+============================================================
+1. FOCUS ON ONE PRIORITY BLOCK AT A TIME:
+   - Identify the single highest-priority pending block (prioritize blocks with mustPass: true that are not 'covered' and have settled !== true).
+   - Work on only ONE block at a time. Do NOT overwhelm the interviewer with suggestions for multiple blocks at once.
+   - NEVER suggest questions for blocks where settled = true, nor for blocks that are already 'covered'.
+
+2. EXACT LITERAL QUESTION ("exactQuestion"):
+   - For this chosen priority block, the suggestion MUST include "exactQuestion": the PRECISE, LITERAL QUESTION that the interviewer should ask.
+   - It MUST be worded directly and ready to be read aloud word-for-word (e.g. "${uiLanguage === 'en' ? 'Can you tell me about a time when you had to manage a rush hour in a fast-paced environment?' : '¿Podrías contarme sobre una ocasión en la que tuviste que atender a muchos clientes bajo presión?'}").
+   - NEVER provide a meta-instruction like "Ask about customer service" or "Pregunta sobre experiencia". It MUST be the exact spoken question.
+   - Must be in the UI language: ${langName}.
+   - The suggestion's "text" field can provide a brief reason or context (e.g., "${uiLanguage === 'en' ? 'Evaluate customer conflict handling' : 'Evaluar manejo de conflictos con clientes'}").
+
+3. ATTEMPT CONTROL (Max 2 attempts per block using probeAttempts from Accumulated Block Status):
+   - Look up the block's current probeAttempts in Accumulated Block Status (defaults to 0 if absent):
+   * ATTEMPT 1 (probeAttempts < 1):
+     If the block has not been asked yet, or the candidate's mention was insufficient:
+     - Suggest the exact question with "attempt": 1, and in "blockUpdates" set probeAttempts = 1 for this block.
+   * ATTEMPT 2 (probeAttempts === 1):
+     If the question was asked once and the candidate's answer in the transcript was still insufficient or vague:
+     - Suggest ONE DIFFERENT, more specific reformulation of the question from a fresh angle with "attempt": 2.
+     - In "blockUpdates", set probeAttempts = 2 for this block.
+     - DO NOT repeat the same phrasing as attempt 1.
+   * SETTLE / CLOSE BLOCK (probeAttempts >= 2):
+     If 2 attempts have already been made and the candidate's answer is STILL unsatisfactory or missing:
+     - Mark this block as settled = true in "blockUpdates".
+     - Assign its definitive liveRating (1-5) based on the available evidence (e.g., 1 or 2 if missing/weak).
+     - DO NOT generate any more probing questions for this settled block!
+     - Immediately move to suggest the NEXT pending block (as Attempt 1, setting probeAttempts = 1 on that next block).
+     - Include a brief closing transition suggestion in "text", such as "${uiLanguage === 'en' ? 'Close this block (rating ' : 'Cerrar este bloque (calificación '}" + liveRating + "${uiLanguage === 'en' ? ') and move to: ' : ') y pasar a: '}" + nextBlockTitle.
+
+4. SATISFACTORY ANSWER:
+   - If the candidate responds satisfactorily at ANY attempt, mark the block status = "covered" with its liveRating (3-5), and do not suggest further questions on this block.
+
+5. NEVER REPEAT ALREADY ASKED QUESTIONS:
+   - Check the transcript. Do NOT suggest a question that has already been asked in the transcript.
 
 Return a strict JSON object with this structure:
 {
@@ -1763,14 +1808,18 @@ Return a strict JSON object with this structure:
       "evidence": "Brief evidence from this or previous segments backing this status (in the UI language: ${langName})",
       "liveRating": "An integer from 1 to 5 reflecting the QUALITY of candidate responses in this block so far (1 = weak/concerning, 3 = acceptable, 5 = excellent). Use null if the block is not_addressed. Do NOT penalize for non-native language.",
       "reasoning": "Why this liveRating/status was assigned (1-2 sentences citing what the candidate said or failed to say, in the UI language: ${langName})",
-      "gaps": "What is specifically missing to PASS this block, or what is failing (short list or 1-2 concrete sentences, in the UI language: ${langName}). If already well covered and passed, can be empty/null."
+      "gaps": "What is specifically missing to PASS this block, or what is failing (short list or 1-2 concrete sentences, in the UI language: ${langName}). If already well covered and passed, can be empty/null.",
+      "probeAttempts": "Number (1 for first attempt, 2 for second attempt, or current count)",
+      "settled": "boolean (true ONLY when closing block after 2 attempts or definitively finished)"
     }
   },
   "suggestions": [
     {
-      "text": "Short actionable suggestion for the interviewer in the UI language: ${langName} (e.g. ${uiLanguage === 'en' ? "'Ask about their schedule availability', 'Dig deeper into previous experience'" : "'Pregunta sobre su disponibilidad', 'Profundiza en su experiencia previa'"}). Prioritize 'must-pass' blocks not yet covered.",
-      "isFlag": boolean (true if it's a red flag warning from the guide),
-      "relatedBlockId": "optional_block_id_it_relates_to"
+      "text": "Brief contextual guidance or transition note in the UI language: ${langName}",
+      "isFlag": boolean,
+      "relatedBlockId": "id of the block",
+      "exactQuestion": "THE LITERAL READ-ALOUD QUESTION FOR THE INTERVIEWER TO ASK in the UI language: ${langName}",
+      "attempt": 1 | 2
     }
   ],
   "languageNote": "Optional note in the UI language (${langName}) if the candidate is struggling with English or only responding in Spanish to English questions."
@@ -1815,27 +1864,62 @@ Return a strict JSON object with this structure:
 
     const newTranscript = (prevLive.transcript ? prevLive.transcript + '\n\n' : '') + (aiResult.transcriptSegment || '');
     
-    // Merge block updates intelligently (don't degrade 'covered')
+    // Merge block updates with strict persistence of probeAttempts, settled, and frozen liveRating
     const newBlockStatus = { ...prevLive.blockStatus };
-    for (const [blockId, update] of Object.entries(aiResult.blockUpdates || {})) {
+    for (const [blockId, updateRaw] of Object.entries(aiResult.blockUpdates || {})) {
+      const update = updateRaw as any;
       const existing = newBlockStatus[blockId];
-      if (existing && existing.status === 'covered') {
-        if ((update as any).status === 'covered') {
-          newBlockStatus[blockId] = update as any; 
-        } else {
-          // keep 'covered' status, but update liveRating if AI provided one
-          if ((update as any).liveRating !== undefined) {
-            existing.liveRating = (update as any).liveRating;
-          }
-          if ((update as any).reasoning !== undefined) {
-            existing.reasoning = (update as any).reasoning;
-          }
-          if ((update as any).gaps !== undefined) {
-            existing.gaps = (update as any).gaps;
-          }
-        }
+      
+      if (!existing) {
+        newBlockStatus[blockId] = {
+          ...update,
+          probeAttempts: typeof update.probeAttempts === 'number' ? Math.max(0, update.probeAttempts) : 0,
+          settled: !!update.settled
+        };
       } else {
-        newBlockStatus[blockId] = update as any;
+        const wasSettled = !!existing.settled;
+        const nowSettled = wasSettled || !!update.settled;
+        const finalProbeAttempts = Math.max(existing.probeAttempts || 0, update.probeAttempts || 0);
+
+        if (wasSettled) {
+          // Once settled = true, preserve settled, probeAttempts cannot decrease, and liveRating is fixed permanently
+          newBlockStatus[blockId] = {
+            ...existing,
+            settled: true,
+            probeAttempts: finalProbeAttempts,
+            evidence: update.evidence || existing.evidence,
+            reasoning: update.reasoning || existing.reasoning
+          };
+        } else if (nowSettled) {
+          // Block becomes settled on this update: freeze its definitive liveRating
+          newBlockStatus[blockId] = {
+            ...existing,
+            ...update,
+            settled: true,
+            probeAttempts: finalProbeAttempts,
+            liveRating: (update.liveRating !== undefined && update.liveRating !== null) ? update.liveRating : existing.liveRating
+          };
+        } else if (existing.status === 'covered' && update.status !== 'covered') {
+          // Do not regress 'covered' status
+          newBlockStatus[blockId] = {
+            ...existing,
+            confidence: Math.max(existing.confidence || 0, update.confidence || 0),
+            evidence: update.evidence || existing.evidence,
+            liveRating: (update.liveRating !== undefined && update.liveRating !== null) ? update.liveRating : existing.liveRating,
+            reasoning: update.reasoning || existing.reasoning,
+            gaps: update.gaps || existing.gaps,
+            probeAttempts: finalProbeAttempts,
+            settled: false
+          };
+        } else {
+          newBlockStatus[blockId] = {
+            ...existing,
+            ...update,
+            probeAttempts: finalProbeAttempts,
+            settled: false,
+            liveRating: (update.liveRating !== undefined && update.liveRating !== null) ? update.liveRating : existing.liveRating
+          };
+        }
       }
     }
 
@@ -1844,7 +1928,13 @@ Return a strict JSON object with this structure:
       startedAt: prevLive.startedAt,
       transcript: newTranscript,
       blockStatus: newBlockStatus,
-      suggestions: aiResult.suggestions || [],
+      suggestions: (aiResult.suggestions || []).map((s: any) => ({
+        text: s.text || '',
+        isFlag: !!s.isFlag,
+        relatedBlockId: s.relatedBlockId || undefined,
+        exactQuestion: s.exactQuestion || undefined,
+        attempt: typeof s.attempt === 'number' ? s.attempt : undefined
+      })),
       languageNote: aiResult.languageNote,
       updatedAt: new Date().toISOString()
     };

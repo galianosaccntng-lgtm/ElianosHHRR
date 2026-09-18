@@ -471,42 +471,71 @@ export function LiveInterviewPanel({
             <div className="space-y-4">
               {guide.blocks.map(b => {
                 const status = liveState?.blockStatus?.[b.id];
-                const colorClass = status?.status === 'covered' ? 'text-emerald-600 bg-emerald-50 border-emerald-200' :
-                                   status?.status === 'partial' ? 'text-amber-600 bg-amber-50 border-amber-200' :
-                                   'text-gray-400 border-gray-100';
+                const isSettled = !!status?.settled;
+                const isCovered = status?.status === 'covered';
+                const isPartial = status?.status === 'partial';
+
+                const colorClass = isSettled 
+                  ? 'text-slate-600 bg-slate-50/80 border-slate-300/80 opacity-80'
+                  : isCovered 
+                    ? 'text-emerald-600 bg-emerald-50 border-emerald-200' 
+                    : isPartial 
+                      ? 'text-amber-600 bg-amber-50 border-amber-200' 
+                      : 'text-gray-400 border-gray-100';
                 
                 const rating = status?.liveRating;
-                const isNotApproved = (b.mustPass && (rating == null || rating < 4)) || (status?.status !== 'covered');
+                const isNotApproved = !isSettled && ((b.mustPass && (rating == null || rating < 4)) || (!isCovered));
+
                 return (
                   <div key={b.id} className={`p-3 rounded-xl border ${colorClass} transition-colors`}>
                     <div className="flex justify-between items-start mb-1">
-                      <span className="font-bold text-sm leading-tight pr-2">{b.title}</span>
-                      {status?.status === 'covered' ? <CheckCircle2 className="w-4 h-4 shrink-0" /> : <Circle className="w-4 h-4 shrink-0" />}
+                      <div className="flex items-center gap-1.5 flex-wrap pr-2">
+                        <span className="font-bold text-sm leading-tight text-gray-900">{b.title}</span>
+                        {isSettled && (
+                          <span className="text-[10px] uppercase font-bold tracking-wider px-2 py-0.5 bg-slate-200 text-slate-700 rounded-md">
+                            {t.liveClosedLabel}
+                          </span>
+                        )}
+                        {status?.probeAttempts && status.probeAttempts > 0 ? (
+                          <span className="text-[10px] font-semibold text-slate-500 bg-slate-100 px-1.5 py-0.5 rounded">
+                            {t.liveAttemptLabel} {status.probeAttempts}/2
+                          </span>
+                        ) : null}
+                      </div>
+                      {isCovered ? (
+                        <CheckCircle2 className="w-4 h-4 shrink-0 text-emerald-600" />
+                      ) : isSettled ? (
+                        <Circle className="w-4 h-4 shrink-0 text-slate-400 fill-slate-200" />
+                      ) : (
+                        <Circle className="w-4 h-4 shrink-0 text-gray-400" />
+                      )}
                     </div>
-                    {b.mustPass && <span className="text-[10px] uppercase font-bold tracking-wider px-1.5 py-0.5 bg-white/60 rounded">Must-Pass</span>}
+                    {b.mustPass && <span className="text-[10px] uppercase font-bold tracking-wider px-1.5 py-0.5 bg-white/60 rounded border border-gray-200/50">Must-Pass</span>}
                     {status && (
                       <div className="mt-2 space-y-2">
                         <div className="text-xs opacity-90 leading-tight">
-                          <span className="font-bold block mb-1">{t.liveConfidenceLabel} {status.confidence}%</span>
-                          <p className="mt-1">{status.evidence}</p>
+                          <span className="font-bold block mb-1 text-slate-800">{t.liveConfidenceLabel} {status.confidence}%</span>
+                          <p className="mt-1 text-slate-700">{status.evidence}</p>
                           {status.reasoning && (
-                            <p className="mt-1.5"><span className="font-bold">{t.liveReasoningLabel}</span> {status.reasoning}</p>
+                            <p className="mt-1.5 text-slate-700"><span className="font-bold">{t.liveReasoningLabel}</span> {status.reasoning}</p>
                           )}
                           {status.gaps && (
-                            <div className={`mt-1.5 p-2 rounded-lg ${isNotApproved && b.mustPass ? 'bg-amber-100 text-amber-900 border border-amber-300' : 'bg-gray-50 border border-gray-200'}`}>
+                            <div className={`mt-1.5 p-2 rounded-lg ${isNotApproved && b.mustPass ? 'bg-amber-100 text-amber-900 border border-amber-300' : 'bg-gray-50 border border-gray-200 text-gray-700'}`}>
                               <span className="font-bold">{t.liveGapsLabel}</span> {Array.isArray(status.gaps) ? status.gaps.join(" ") : status.gaps}
                             </div>
                           )}
                         </div>
                         <div className="pt-2 border-t border-current/10">
-                          <span className="text-[10px] uppercase tracking-wider font-bold opacity-80 block mb-1">Live Rating</span>
+                          <span className="text-[10px] uppercase tracking-wider font-bold opacity-80 block mb-1">
+                            Live Rating {isSettled ? `(${t.liveClosedLabel})` : ''}
+                          </span>
                           <div className="flex gap-1">
                             {[1, 2, 3, 4, 5].map(ratingItem => (
                               <div
                                 key={ratingItem}
                                 className={`w-6 h-6 rounded-full flex items-center justify-center text-xs font-bold ${
                                   status.liveRating === ratingItem
-                                    ? 'bg-current text-white scale-110'
+                                    ? 'bg-slate-900 text-white scale-110 shadow-xs'
                                     : 'bg-white/50 border border-current/20 opacity-50'
                                 }`}
                               >
@@ -571,11 +600,66 @@ export function LiveInterviewPanel({
              )}
              <div className="space-y-3">
                {liveState?.suggestions && liveState.suggestions.length > 0 ? (
-                 liveState.suggestions.map((s, i) => (
-                   <div key={i} className={`p-3 rounded-xl shadow-sm border ${s.isFlag ? 'bg-red-50 border-red-100 text-red-900' : 'bg-white border-blue-100 text-blue-900'}`}>
-                     <p className="text-sm font-medium leading-relaxed">{s.text}</p>
-                   </div>
-                 ))
+                 liveState.suggestions.map((s, i) => {
+                   const relatedBlock = s.relatedBlockId 
+                     ? guide.blocks.find(b => b.id === s.relatedBlockId) 
+                     : undefined;
+                   const hasExact = !!s.exactQuestion;
+                   
+                   return (
+                     <div 
+                       key={i} 
+                       className={`p-3.5 rounded-2xl shadow-xs border transition-all ${
+                         s.isFlag 
+                           ? 'bg-rose-50 border-rose-200 text-rose-900' 
+                           : hasExact 
+                             ? 'bg-white border-blue-200/90 text-blue-950 ring-1 ring-blue-400/20' 
+                             : 'bg-white border-blue-100 text-blue-900'
+                       }`}
+                     >
+                       {/* Header badges: Attempt & Block */}
+                       {(hasExact || s.attempt || relatedBlock) && (
+                         <div className="flex flex-wrap items-center gap-1.5 mb-2.5">
+                           {hasExact && (
+                             <span className="inline-flex items-center px-2 py-0.5 rounded-md text-[10px] font-bold uppercase tracking-wider bg-blue-600 text-white shadow-2xs">
+                               {t.liveQuestionToAskLabel}
+                             </span>
+                           )}
+                           {s.attempt && (
+                             <span className={`inline-flex items-center px-2 py-0.5 rounded-md text-[10px] font-bold uppercase tracking-wider ${
+                               s.attempt === 2 
+                                 ? 'bg-amber-100 text-amber-800 border border-amber-300/80' 
+                                 : 'bg-indigo-100 text-indigo-800 border border-indigo-200/80'
+                             }`}>
+                               {t.liveAttemptLabel} {s.attempt}/2
+                             </span>
+                           )}
+                           {relatedBlock && (
+                             <span className="text-[11px] font-semibold text-slate-500 truncate max-w-[200px]" title={relatedBlock.title}>
+                               • {relatedBlock.title}
+                             </span>
+                           )}
+                         </div>
+                       )}
+
+                       {/* Exact Question to Speak Out Loud */}
+                       {hasExact && (
+                         <div className="p-3 bg-blue-50/70 border border-blue-200/70 rounded-xl mb-2 text-slate-900 font-serif text-sm font-semibold leading-relaxed">
+                           <span className="text-blue-500 font-sans mr-1 text-base select-none">“</span>
+                           {s.exactQuestion}
+                           <span className="text-blue-500 font-sans ml-1 text-base select-none">”</span>
+                         </div>
+                       )}
+
+                       {/* Generic / context advice secondary */}
+                       {s.text && (
+                         <p className={`text-xs leading-relaxed ${hasExact ? 'text-slate-600 font-medium' : 'font-medium'}`}>
+                           {s.text}
+                         </p>
+                       )}
+                     </div>
+                   );
+                 })
                ) : (
                  <div className="h-full flex items-center justify-center text-blue-300 text-sm font-medium">
                    {t.liveListeningForSuggestions}

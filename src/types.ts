@@ -88,12 +88,16 @@ export interface LiveInterviewBlockStatus {
   liveRating?: number | null;
   reasoning?: string;
   gaps?: string | string[];
+  probeAttempts?: number;
+  settled?: boolean;
 }
 
 export interface LiveInterviewSuggestion {
   text: string;
   isFlag: boolean;
   relatedBlockId?: string;
+  exactQuestion?: string;
+  attempt?: number;
 }
 
 export interface LiveInterviewState {
