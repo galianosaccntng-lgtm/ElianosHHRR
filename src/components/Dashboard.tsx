@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { InterviewSession, InterviewStatus, SecondInterviewGuide, SecondInterviewScores } from '../types';
-import { ArrowLeft, CheckCircle2, MessageSquare, ChevronRight, FileText, Trash2, Award, Copy, Check, ShieldCheck, LogOut, RefreshCw, Search, Mail, Phone, Loader2, AlertCircle, Clock, PlayCircle, ExternalLink, RotateCcw, Sparkles, Star, HelpCircle, Save } from 'lucide-react';
+import { ArrowLeft, CheckCircle2, MessageSquare, ChevronRight, FileText, Trash2, Award, Copy, Check, ShieldCheck, LogOut, RefreshCw, Search, Mail, Phone, Loader2, AlertCircle, Clock, PlayCircle, ExternalLink, RotateCcw, Sparkles, Star, HelpCircle, Save, Printer } from 'lucide-react';
 import clsx from 'clsx';
 import Markdown from 'react-markdown';
 import { humanConfidence } from '../authenticity';
@@ -53,6 +53,412 @@ export function formatGuideAsPlainText(guide: SecondInterviewGuide, lang: AdminL
   out += isEn ? `* Third Conversation: ${guide.decision?.thirdConversation || 'N/A'}\n` : `* Tercera Conversación: ${guide.decision?.thirdConversation || 'N/A'}\n`;
   out += isEn ? `* Decline: ${guide.decision?.decline || 'N/A'}\n` : `* Declinar: ${guide.decision?.decline || 'N/A'}\n`;
   return out;
+}
+
+export function generatePrintableGuideHtml(
+  guide: SecondInterviewGuide,
+  candidateName: string,
+  candidatePosition: string,
+  dateStr: string,
+  lang: AdminLang = 'es'
+): string {
+  const t = adminI18n[lang];
+  const escapeHtml = (str: string = '') =>
+    str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+
+  const focusPointsHtml = (guide.focusPoints || [])
+    .map((p) => `<li>${escapeHtml(p)}</li>`)
+    .join('');
+
+  const tipsHtml = (guide.interviewerTips || [])
+    .map((tip) => `<li>${escapeHtml(tip)}</li>`)
+    .join('');
+
+  const blocksHtml = (guide.blocks || [])
+    .map((b, bIdx) => {
+      const bQuestions = (guide.questions || []).filter(
+        (q) => (b.questionIds && b.questionIds.includes(q.id)) || q.block === b.title
+      );
+
+      const questionsHtml = bQuestions
+        .map((q, qIdx) => {
+          const langBadge = q.language
+            ? `<span class="badge badge-lang">${escapeHtml(q.language.toUpperCase())}</span>`
+            : '';
+          const listenForList = (q.listenFor || []).map((item) => `<li>${escapeHtml(item)}</li>`).join('');
+          const redFlagsList = (q.redFlags || []).map((item) => `<li>${escapeHtml(item)}</li>`).join('');
+
+          return `
+            <div class="question-card">
+              <div class="question-header">
+                <strong>${escapeHtml(t.printQuestionLabel)} ${bIdx + 1}.${qIdx + 1}</strong>
+                ${langBadge}
+              </div>
+              <div class="question-text">${escapeHtml(q.text)}</div>
+              ${
+                q.purpose
+                  ? `<div class="question-purpose"><em>${escapeHtml(t.printPurposeLabel)}</em> ${escapeHtml(q.purpose)}</div>`
+                  : ''
+              }
+              <div class="signals-grid">
+                ${
+                  listenForList
+                    ? `<div class="signal-col good-signal">
+                        <span class="signal-title">${escapeHtml(t.printListenForLabel)}</span>
+                        <ul>${listenForList}</ul>
+                      </div>`
+                    : ''
+                }
+                ${
+                  redFlagsList
+                    ? `<div class="signal-col red-flag">
+                        <span class="signal-title">${escapeHtml(t.printRedFlagsLabel)}</span>
+                        <ul>${redFlagsList}</ul>
+                      </div>`
+                    : ''
+                }
+              </div>
+            </div>
+          `;
+        })
+        .join('');
+
+      return `
+        <div class="block-section page-break">
+          <div class="block-header">
+            <div>
+              <span class="block-number">${bIdx + 1}</span>
+              <span class="block-title">${escapeHtml(b.title)}</span>
+              <span class="block-mins">(${b.minutes} ${escapeHtml(t.printMinutes)})</span>
+            </div>
+            ${b.mustPass ? `<span class="badge badge-mustpass">${escapeHtml(t.printMustPassBadge)}</span>` : ''}
+          </div>
+          ${b.goal ? `<p class="block-goal"><strong>${escapeHtml(t.blockGoalLabel)}</strong> ${escapeHtml(b.goal)}</p>` : ''}
+          
+          <div class="questions-list">
+            ${questionsHtml}
+          </div>
+
+          <div class="scoring-and-notes">
+            <div class="score-row">
+              <span class="score-label">${escapeHtml(t.printScoreBoxLabel)}</span>
+              <div class="score-boxes">
+                <span class="score-box">1</span>
+                <span class="score-box">2</span>
+                <span class="score-box">3</span>
+                <span class="score-box">4</span>
+                <span class="score-box">5</span>
+              </div>
+            </div>
+            <div class="notes-area">
+              <span class="notes-label">${escapeHtml(t.printNotesLabel)}</span>
+              <div class="notes-line"></div>
+              <div class="notes-line"></div>
+              <div class="notes-line"></div>
+            </div>
+          </div>
+        </div>
+      `;
+    })
+    .join('');
+
+  const decisionObj = guide.decision || ({} as any);
+  const thirdDesc = decisionObj.thirdConversation || decisionObj.secondInterview || '';
+
+  return `<!DOCTYPE html>
+<html lang="${lang}">
+<head>
+  <meta charset="utf-8">
+  <title>${escapeHtml(t.printGuideHeader)} - ${escapeHtml(candidateName)}</title>
+  <style>
+    @page {
+      size: letter portrait;
+      margin: 14mm 14mm 14mm 14mm;
+    }
+    * { box-sizing: border-box; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      color: #1a1a1a;
+      background: #fff;
+      font-size: 10pt;
+      line-height: 1.4;
+      margin: 0;
+      padding: 0;
+    }
+    .header {
+      border-bottom: 2px solid #4B2C20;
+      padding-bottom: 8px;
+      margin-bottom: 14px;
+    }
+    .brand-title {
+      font-size: 17pt;
+      font-weight: 800;
+      color: #4B2C20;
+      margin: 0 0 4px 0;
+      letter-spacing: -0.01em;
+    }
+    .candidate-meta {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 16px;
+      font-size: 9.5pt;
+      color: #333;
+    }
+    .meta-item strong { color: #4B2C20; }
+    .section {
+      margin-bottom: 12px;
+      page-break-inside: avoid;
+      break-inside: avoid;
+    }
+    .section-title {
+      font-size: 10.5pt;
+      font-weight: 700;
+      color: #4B2C20;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      margin-bottom: 4px;
+      border-bottom: 1px solid #E8DFD8;
+      padding-bottom: 2px;
+    }
+    ul {
+      margin: 4px 0;
+      padding-left: 20px;
+    }
+    li {
+      margin-bottom: 3px;
+    }
+    .page-break {
+      page-break-inside: avoid;
+      break-inside: avoid;
+    }
+    .block-section {
+      border: 1px solid #D5C7BC;
+      border-radius: 6px;
+      padding: 10px 12px;
+      margin-bottom: 14px;
+      background: #fff;
+    }
+    .block-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      border-bottom: 1px solid #eee;
+      padding-bottom: 4px;
+      margin-bottom: 6px;
+    }
+    .block-number {
+      display: inline-block;
+      width: 20px;
+      height: 20px;
+      line-height: 20px;
+      text-align: center;
+      background: #4B2C20;
+      color: #fff;
+      font-weight: 700;
+      font-size: 9pt;
+      border-radius: 50%;
+      margin-right: 6px;
+    }
+    .block-title {
+      font-size: 11pt;
+      font-weight: 700;
+      color: #4B2C20;
+    }
+    .block-mins {
+      font-size: 9pt;
+      color: #666;
+      margin-left: 6px;
+    }
+    .block-goal {
+      font-size: 9pt;
+      margin: 4px 0 8px 0;
+      color: #444;
+    }
+    .badge {
+      display: inline-block;
+      font-size: 7.5pt;
+      font-weight: 700;
+      padding: 2px 6px;
+      border-radius: 3px;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+    }
+    .badge-mustpass {
+      background: #4B2C20;
+      color: #fff;
+    }
+    .badge-lang {
+      background: #EDE8E3;
+      color: #4B2C20;
+      border: 1px solid #D5C7BC;
+      margin-left: 6px;
+    }
+    .question-card {
+      margin-top: 8px;
+      padding: 6px 8px;
+      background: #FAF8F5;
+      border: 1px solid #EBE5DF;
+      border-radius: 4px;
+    }
+    .question-header {
+      display: flex;
+      align-items: center;
+      margin-bottom: 2px;
+      font-size: 8.5pt;
+      color: #666;
+    }
+    .question-text {
+      font-size: 10pt;
+      font-weight: 600;
+      color: #111;
+      margin-bottom: 3px;
+    }
+    .question-purpose {
+      font-size: 8.5pt;
+      color: #555;
+      margin-bottom: 6px;
+    }
+    .signals-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 8px;
+      margin-top: 4px;
+    }
+    .signal-col {
+      font-size: 8.5pt;
+      padding: 4px 6px;
+      border-radius: 3px;
+    }
+    .signal-title {
+      font-weight: 700;
+      display: block;
+      margin-bottom: 2px;
+      font-size: 8pt;
+      text-transform: uppercase;
+    }
+    .good-signal {
+      background: #F0F7F2;
+      border-left: 3px solid #2D8A4E;
+    }
+    .good-signal .signal-title { color: #2D8A4E; }
+    .red-flag {
+      background: #FDF2F2;
+      border-left: 3px solid #C53030;
+    }
+    .red-flag .signal-title { color: #C53030; }
+    .scoring-and-notes {
+      margin-top: 10px;
+      padding-top: 8px;
+      border-top: 1px dashed #D5C7BC;
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+    .score-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+    .score-label {
+      font-size: 9pt;
+      font-weight: 700;
+      color: #4B2C20;
+    }
+    .score-boxes {
+      display: flex;
+      gap: 8px;
+    }
+    .score-box {
+      display: inline-block;
+      width: 26px;
+      height: 22px;
+      line-height: 20px;
+      text-align: center;
+      border: 1.5px solid #4B2C20;
+      border-radius: 4px;
+      font-weight: 700;
+      font-size: 9pt;
+      color: #4B2C20;
+    }
+    .notes-area {
+      margin-top: 4px;
+    }
+    .notes-label {
+      font-size: 8.5pt;
+      font-weight: 700;
+      color: #555;
+      display: block;
+      margin-bottom: 4px;
+    }
+    .notes-line {
+      height: 18px;
+      border-bottom: 1px solid #CCC;
+    }
+    .decision-section {
+      border: 1.5px solid #4B2C20;
+      border-radius: 6px;
+      padding: 10px 12px;
+      margin-top: 14px;
+      background: #FAF8F5;
+      page-break-inside: avoid;
+      break-inside: avoid;
+    }
+    .decision-row {
+      margin-bottom: 6px;
+      font-size: 9pt;
+    }
+    .decision-row strong {
+      color: #4B2C20;
+    }
+    @media print {
+      body { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+    }
+  </style>
+</head>
+<body>
+  <div class="header">
+    <div class="brand-title">${escapeHtml(t.printGuideHeader)}</div>
+    <div class="candidate-meta">
+      <div class="meta-item"><strong>${escapeHtml(t.printCandidateLabel)}</strong> ${escapeHtml(candidateName)}</div>
+      <div class="meta-item"><strong>${escapeHtml(t.printPositionLabel)}</strong> ${escapeHtml(candidatePosition)}</div>
+      <div class="meta-item"><strong>${escapeHtml(t.printDateLabel)}</strong> ${escapeHtml(dateStr)}</div>
+    </div>
+  </div>
+
+  ${
+    guide.focusPoints && guide.focusPoints.length > 0
+      ? `<div class="section">
+          <div class="section-title">${escapeHtml(t.printFocusPointsLabel)}</div>
+          <ul>${focusPointsHtml}</ul>
+        </div>`
+      : ''
+  }
+
+  ${
+    guide.interviewerTips && guide.interviewerTips.length > 0
+      ? `<div class="section">
+          <div class="section-title">${escapeHtml(t.printTipsLabel)}</div>
+          <ul>${tipsHtml}</ul>
+        </div>`
+      : ''
+  }
+
+  <div class="section">
+    ${blocksHtml}
+  </div>
+
+  ${
+    decisionObj && (decisionObj.hire || thirdDesc || decisionObj.decline)
+      ? `<div class="decision-section">
+          <div class="section-title" style="border-bottom:none; margin-bottom: 6px;">${escapeHtml(t.printDecisionLabel)}</div>
+          ${decisionObj.hire ? `<div class="decision-row"><strong>✓ ${escapeHtml(t.printHireLabel)}</strong> ${escapeHtml(decisionObj.hire)}</div>` : ''}
+          ${thirdDesc ? `<div class="decision-row"><strong>? ${escapeHtml(t.printThirdLabel)}</strong> ${escapeHtml(thirdDesc)}</div>` : ''}
+          ${decisionObj.decline ? `<div class="decision-row"><strong>✕ ${escapeHtml(t.printDeclineLabel)}</strong> ${escapeHtml(decisionObj.decline)}</div>` : ''}
+        </div>`
+      : ''
+  }
+</body>
+</html>`;
 }
 
 export function getEffectiveStatus(session: InterviewSession): InterviewStatus {
@@ -415,6 +821,25 @@ export function Dashboard({ adminToken, onBack, onLogout, onResume, onDelete, on
     navigator.clipboard.writeText(text);
     setCopiedGuide(true);
     setTimeout(() => setCopiedGuide(false), 2000);
+  };
+
+  const handlePrintGuide = (guide: SecondInterviewGuide) => {
+    if (!selectedSession || !guide) return;
+    const candidateName = selectedSession.candidateInfo?.name || t.unnamedApplicant;
+    const candidatePosition = selectedSession.position || t.notSpecified;
+    const dateStr = formatInterviewDate(selectedSession.date, lang);
+    const htmlContent = generatePrintableGuideHtml(guide, candidateName, candidatePosition, dateStr, lang);
+
+    const printWindow = window.open('', '_blank');
+    if (printWindow) {
+      printWindow.document.open();
+      printWindow.document.write(htmlContent);
+      printWindow.document.close();
+      printWindow.focus();
+      setTimeout(() => {
+        printWindow.print();
+      }, 350);
+    }
   };
 
   // Soft delete: moves to trash
@@ -1586,6 +2011,7 @@ ${t.copyContactStatus} ${effectiveStatusLabel}`;
                       <LiveInterviewPanel 
                         session={selectedSession}
                         adminToken={adminToken!}
+                        lang={lang}
                         onStateUpdate={fetchServerSessions}
                         onDumpScores={(newScores) => {
                           setScores(prev => ({ ...prev, ...newScores }));
@@ -1683,6 +2109,16 @@ ${t.copyContactStatus} ${effectiveStatusLabel}`;
                               >
                                 {copiedGuide ? <Check className="w-3.5 h-3.5 text-green-600" /> : <Copy className="w-3.5 h-3.5 text-[#D4A373]" />}
                                 {copiedGuide ? t.guideCopiedBtn : t.guideCopyBtn}
+                              </button>
+
+                              <button
+                                onClick={() => handlePrintGuide(guide)}
+                                disabled={!guide}
+                                className="flex items-center gap-1.5 px-3.5 py-2 bg-white border border-[#E8DFD8] text-[#4B2C20] rounded-xl text-xs font-bold uppercase tracking-wider hover:bg-[#F5EFE6] transition-colors disabled:opacity-50 shadow-xs"
+                                title={t.guidePrintTooltip}
+                              >
+                                <Printer className="w-3.5 h-3.5 text-[#D4A373]" />
+                                {t.guidePrintBtn}
                               </button>
 
                               <button

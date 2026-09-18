@@ -1686,7 +1686,8 @@ app.post("/api/admin/sessions/:id/live-interview/analyze", liveInterviewAnalyzeL
   if (!verifyAdminAccess(authHeader, res)) return;
 
   const { id } = req.params;
-  const { audioData, mimeType, accumulatedTranscript, accumulatedBlockStatus, consentConfirmedAt, isFinal } = req.body;
+  const { audioData, mimeType, accumulatedTranscript, accumulatedBlockStatus, consentConfirmedAt, isFinal, uiLanguage } = req.body;
+  const langName = uiLanguage === 'en' ? 'English' : 'Spanish';
   
   const sessions = await getStoredSessions();
   const session = sessions.find((s) => s.id === id);
@@ -1742,25 +1743,25 @@ ${JSON.stringify(accumulatedBlockStatus || {})}
 
 Return a strict JSON object with this structure:
 {
-  "transcriptSegment": "Transcription of THIS audio segment. Prefix with speaker if distinguishable (e.g. 'Entrevistador: ...' or 'Candidato: ...'). Mixed languages are fine.",
+  "transcriptSegment": "Transcription of THIS audio segment exactly as spoken (do NOT translate; preserve the spoken English/Spanish mixture). Prefix with speaker if distinguishable (e.g. 'Interviewer: ...' or 'Candidate: ...').",
   "blockUpdates": {
     "block_id_here": {
       "status": "covered" | "partial" | "not_addressed",
       "confidence": number 0-100,
-      "evidence": "Brief evidence from this or previous segments backing this status (IN SPANISH)",
+      "evidence": "Brief evidence from this or previous segments backing this status (in the UI language: ${langName})",
       "liveRating": "An integer from 1 to 5 reflecting the QUALITY of candidate responses in this block so far (1 = weak/concerning, 3 = acceptable, 5 = excellent). Use null if the block is not_addressed. Do NOT penalize for non-native language.",
-      "reasoning": "Por qué se asignó este liveRating/estado (1-2 frases citando lo que dijo o dejó de decir el candidato, EN ESPAÑOL)",
-      "gaps": "Qué falta específicamente para APROBAR este bloque, o qué está fallando (lista breve o 1-2 frases concretas, EN ESPAÑOL). Si está bien cubierto y aprobado, puede ir vacío/null."
+      "reasoning": "Why this liveRating/status was assigned (1-2 sentences citing what the candidate said or failed to say, in the UI language: ${langName})",
+      "gaps": "What is specifically missing to PASS this block, or what is failing (short list or 1-2 concrete sentences, in the UI language: ${langName}). If already well covered and passed, can be empty/null."
     }
   },
   "suggestions": [
     {
-      "text": "Short actionable suggestion for the interviewer IN SPANISH (e.g. 'Pregunta sobre su disponibilidad', 'Profundiza en su experiencia previa'). Prioritize 'must-pass' blocks not yet covered.",
+      "text": "Short actionable suggestion for the interviewer in the UI language: ${langName} (e.g. ${uiLanguage === 'en' ? "'Ask about their schedule availability', 'Dig deeper into previous experience'" : "'Pregunta sobre su disponibilidad', 'Profundiza en su experiencia previa'"}). Prioritize 'must-pass' blocks not yet covered.",
       "isFlag": boolean (true if it's a red flag warning from the guide),
       "relatedBlockId": "optional_block_id_it_relates_to"
     }
   ],
-  "languageNote": "Optional note IN SPANISH if the candidate is struggling with English or only responding in Spanish to English questions."
+  "languageNote": "Optional note in the UI language (${langName}) if the candidate is struggling with English or only responding in Spanish to English questions."
 }`;
 
     const response = await generateContentWithInfiniteResilience({
@@ -1872,7 +1873,8 @@ app.post("/api/admin/sessions/:id/live-interview/probe-questions", liveInterview
   if (!verifyAdminAccess(authHeader, res)) return;
 
   const { id } = req.params;
-  const { blockId } = req.body;
+  const { blockId, uiLanguage } = req.body;
+  const langName = uiLanguage === 'en' ? 'English' : 'Spanish';
   
   let session: any = null;
   if (firestoreClient) {
@@ -1913,7 +1915,7 @@ Full Transcript so far:
 
 Task:
 Based on what the candidate has already said and the identified "gaps", generate 2-4 specific follow-up questions to investigate exactly what is missing and complete the evaluation of this block. Do not repeat what has already been answered. Do not penalize for non-native language.
-Return the questions in BOTH Spanish (es) and English (en), along with a rationale (in Spanish) for why this question helps.
+Return the questions in BOTH Spanish (es) and English (en), along with a rationale in the UI language (${langName}) for why this question helps.
 
 Return a strict JSON object:
 {
@@ -1921,7 +1923,7 @@ Return a strict JSON object:
     {
       "es": "Question in Spanish",
       "en": "Question in English",
-      "rationale": "Por qué esta pregunta ayuda a cerrar la brecha (en español)"
+      "rationale": "Why this question helps bridge the gap (in ${langName})"
     }
   ]
 }`;

@@ -2,18 +2,22 @@ import React, { useState, useEffect, useRef } from 'react';
 import { mapLiveStateToScores } from '../patch';
 import { InterviewSession, LiveInterviewState, SecondInterviewBlock } from '../types';
 import { Mic, Square, Pause, AlertCircle, Play, CheckCircle2, Circle, Loader2 } from 'lucide-react';
+import { adminI18n, AdminLang } from '../i18n-admin';
 
 export function LiveInterviewPanel({ 
   session, 
   adminToken,
+  lang = 'es',
   onStateUpdate,
   onDumpScores
 }: { 
   session: InterviewSession; 
   adminToken: string;
+  lang?: AdminLang;
   onStateUpdate: () => void;
   onDumpScores: (scores: Record<string, number>) => void;
 }) {
+  const t = adminI18n[lang];
   const guide = session.secondInterviewGuide;
   const [liveState, setLiveState] = useState(session.liveInterview);
   const liveStateRef = useRef(liveState);
@@ -63,7 +67,7 @@ export function LiveInterviewPanel({
           'Content-Type': 'application/json',
           'x-admin-passcode': adminToken
         },
-        body: JSON.stringify({ blockId })
+        body: JSON.stringify({ blockId, uiLanguage: lang })
       });
       const data = await res.json();
       if (data.success && data.questions) {
@@ -107,7 +111,8 @@ export function LiveInterviewPanel({
           'x-admin-passcode': adminToken
         },
         body: JSON.stringify({
-          consentConfirmedAt: new Date().toISOString()
+          consentConfirmedAt: new Date().toISOString(),
+          uiLanguage: lang
         })
       });
       onStateUpdate();
@@ -130,7 +135,7 @@ export function LiveInterviewPanel({
     
     const mimeType = getSupportedMimeType();
     if (!mimeType) {
-       alert("No hay formatos de audio soportados en este navegador para enviar a la IA.");
+       alert(t.liveAudioNotSupported);
        return;
     }
 
@@ -171,7 +176,7 @@ export function LiveInterviewPanel({
         }, 1000);
       }
     } catch (err) {
-      alert("No se pudo acceder al micrófono. Por favor permite el acceso y reintenta.");
+      alert(t.liveMicError);
       console.error(err);
     }
   };
@@ -222,7 +227,8 @@ export function LiveInterviewPanel({
           'x-admin-passcode': adminToken
         },
         body: JSON.stringify({
-          isFinal: true
+          isFinal: true,
+          uiLanguage: lang
         })
       });
       const data = await res.json();
@@ -249,9 +255,8 @@ export function LiveInterviewPanel({
           },
           body: JSON.stringify({
             audioData: base64data,
-            mimeType: blob.type
-            
-            
+            mimeType: blob.type,
+            uiLanguage: lang
           })
         });
         const data = await res.json();
@@ -279,9 +284,9 @@ export function LiveInterviewPanel({
       <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 mb-6 relative z-10">
         <div>
           <h3 className="text-xl font-serif font-bold text-purple-900 flex items-center gap-2">
-            <Mic className="w-5 h-5" /> Entrevista en Vivo Asistida por IA
+            <Mic className="w-5 h-5" /> {t.liveInterviewTitle}
           </h3>
-          <p className="text-sm text-purple-700/80 font-medium">Transcripción y sugerencias en tiempo real basadas en la guía</p>
+          <p className="text-sm text-purple-700/80 font-medium">{t.liveInterviewSubtitle}</p>
         </div>
         
         <div className="flex items-center gap-3">
@@ -291,7 +296,7 @@ export function LiveInterviewPanel({
                 onClick={() => hasConsent ? startRecording() : setShowConsentModal(true)}
                 className="flex items-center gap-2 px-5 py-2.5 bg-purple-600 hover:bg-purple-700 text-white rounded-xl font-bold shadow-xs transition-colors"
               >
-                <Play className="w-4 h-4 fill-current" /> Iniciar
+                <Play className="w-4 h-4 fill-current" /> {t.liveInterviewStart}
               </button>
             ) : (
               <>
@@ -302,7 +307,7 @@ export function LiveInterviewPanel({
                 <button 
                   onClick={pauseRecording}
                   className="p-2.5 bg-amber-100 hover:bg-amber-200 text-amber-900 rounded-xl transition-colors"
-                  title={isPaused ? "Reanudar" : "Pausar"}
+                  title={isPaused ? t.liveInterviewResume : t.liveInterviewPause}
                 >
                   {isPaused ? <Play className="w-4 h-4 fill-current" /> : <Pause className="w-4 h-4 fill-current" />}
                 </button>
@@ -310,14 +315,14 @@ export function LiveInterviewPanel({
                   onClick={stopRecording}
                   className="flex items-center gap-2 px-4 py-2.5 bg-red-100 hover:bg-red-200 text-red-900 rounded-xl font-bold transition-colors"
                 >
-                  <Square className="w-4 h-4 fill-current" /> Detener y Guardar
+                  <Square className="w-4 h-4 fill-current" /> {t.liveInterviewStopSave}
                 </button>
               </>
             )
           ) : (
             <div className="flex gap-2 items-center">
               <span className="px-4 py-2 bg-gray-100 text-gray-700 font-bold rounded-lg border text-sm">
-                Entrevista Finalizada
+                {t.liveInterviewEnded}
               </span>
               <button
                 onClick={() => {
@@ -326,7 +331,7 @@ export function LiveInterviewPanel({
                 }}
                 className="px-4 py-2 bg-emerald-100 hover:bg-emerald-200 text-emerald-900 font-bold rounded-lg transition-colors text-sm"
               >
-                Volcar a puntuaciones
+                {t.liveInterviewDumpScores}
               </button>
             </div>
           )}
@@ -338,7 +343,7 @@ export function LiveInterviewPanel({
           
           {/* Zona 1: Transcripción */}
           <div className="lg:col-span-1 bg-purple-50/50 rounded-2xl border border-purple-100 p-4 flex flex-col h-[400px]">
-            <h4 className="font-bold text-purple-900 text-xs tracking-widest uppercase mb-3">Transcripción en Vivo</h4>
+            <h4 className="font-bold text-purple-900 text-xs tracking-widest uppercase mb-3">{t.liveTranscriptTitle}</h4>
             <div ref={transcriptScrollRef} className="flex-1 overflow-y-auto space-y-3 pr-2 custom-scrollbar">
               {liveState?.transcript ? (
                 liveState.transcript.split('\n\n').map((para, i) => (
@@ -346,7 +351,7 @@ export function LiveInterviewPanel({
                 ))
               ) : (
                 <div className="h-full flex items-center justify-center text-purple-300 text-sm font-medium">
-                  Esperando audio...
+                  {t.liveWaitingAudio}
                 </div>
               )}
             </div>
@@ -354,7 +359,7 @@ export function LiveInterviewPanel({
 
           {/* Zona 2: Estado de Bloques */}
           <div className="lg:col-span-1 bg-white rounded-2xl border border-gray-200 p-4 h-[400px] overflow-y-auto">
-            <h4 className="font-bold text-gray-900 text-xs tracking-widest uppercase mb-3">Estado de la Guía</h4>
+            <h4 className="font-bold text-gray-900 text-xs tracking-widest uppercase mb-3">{t.liveGuideStatusTitle}</h4>
             <div className="space-y-4">
               {guide.blocks.map(b => {
                 const status = liveState?.blockStatus?.[b.id];
@@ -374,14 +379,14 @@ export function LiveInterviewPanel({
                     {status && (
                       <div className="mt-2 space-y-2">
                         <div className="text-xs opacity-90 leading-tight">
-                          <span className="font-bold block mb-1">Confianza: {status.confidence}%</span>
+                          <span className="font-bold block mb-1">{t.liveConfidenceLabel} {status.confidence}%</span>
                           <p className="mt-1">{status.evidence}</p>
                           {status.reasoning && (
-                            <p className="mt-1.5"><span className="font-bold">Por qué:</span> {status.reasoning}</p>
+                            <p className="mt-1.5"><span className="font-bold">{t.liveReasoningLabel}</span> {status.reasoning}</p>
                           )}
                           {status.gaps && (
                             <div className={`mt-1.5 p-2 rounded-lg ${isNotApproved && b.mustPass ? 'bg-amber-100 text-amber-900 border border-amber-300' : 'bg-gray-50 border border-gray-200'}`}>
-                              <span className="font-bold">Qué falta:</span> {Array.isArray(status.gaps) ? status.gaps.join(" ") : status.gaps}
+                              <span className="font-bold">{t.liveGapsLabel}</span> {Array.isArray(status.gaps) ? status.gaps.join(" ") : status.gaps}
                             </div>
                           )}
                         </div>
@@ -409,13 +414,13 @@ export function LiveInterviewPanel({
                         className="mt-3 pt-2 border-t border-current/10 cursor-pointer flex items-center justify-center text-xs font-bold opacity-70 hover:opacity-100 transition-opacity"
                         onClick={() => fetchProbeQuestions(b.id)}
                       >
-                        <span>Clic para preguntas de sondeo</span>
+                        <span>{t.liveProbeQuestionsBtn}</span>
                       </div>
                     )}
                     {probingBlockId === b.id && (
                       <div className="mt-3 p-3 bg-indigo-50 border border-indigo-100 rounded-xl text-left">
                         <div className="flex justify-between items-center mb-2">
-                          <h5 className="font-bold text-indigo-900 text-xs uppercase tracking-wider">Preguntas de Sondeo</h5>
+                          <h5 className="font-bold text-indigo-900 text-xs uppercase tracking-wider">{t.liveProbeQuestionsTitle}</h5>
                           <button onClick={() => setProbingBlockId(null)} className="text-indigo-500 hover:text-indigo-900"><Square className="w-4 h-4" /></button>
                         </div>
                         {probingLoading ? (
@@ -424,16 +429,20 @@ export function LiveInterviewPanel({
                           </div>
                         ) : probingQuestions ? (
                           <div className="space-y-3">
-                            {probingQuestions.map((q, idx) => (
-                              <div key={idx} className="text-xs">
-                                <p className="font-bold text-indigo-900">{q.es}</p>
-                                <p className="italic text-indigo-700 mt-0.5">{q.en}</p>
-                                <p className="mt-1 text-indigo-800/80 leading-tight border-l-2 border-indigo-200 pl-2">{q.rationale}</p>
-                              </div>
-                            ))}
+                            {probingQuestions.map((q, idx) => {
+                              const primary = lang === 'en' ? (q.en || q.es) : (q.es || q.en);
+                              const secondary = lang === 'en' ? (q.en ? q.es : '') : (q.es ? q.en : '');
+                              return (
+                                <div key={idx} className="text-xs">
+                                  <p className="font-bold text-indigo-900">{primary}</p>
+                                  {secondary && <p className="italic text-indigo-700 mt-0.5">{secondary}</p>}
+                                  {q.rationale && <p className="mt-1 text-indigo-800/80 leading-tight border-l-2 border-indigo-200 pl-2">{q.rationale}</p>}
+                                </div>
+                              );
+                            })}
                           </div>
                         ) : (
-                          <div className="text-xs text-indigo-500">Error al cargar preguntas.</div>
+                          <div className="text-xs text-indigo-500">{t.liveProbeQuestionsError}</div>
                         )}
                       </div>
                     )}
@@ -445,7 +454,7 @@ export function LiveInterviewPanel({
 
           {/* Zona 3: Sugerencias */}
           <div className="lg:col-span-1 bg-blue-50/50 rounded-2xl border border-blue-100 p-4 h-[400px] overflow-y-auto">
-             <h4 className="font-bold text-blue-900 text-xs tracking-widest uppercase mb-3">Sugerencias (IA)</h4>
+             <h4 className="font-bold text-blue-900 text-xs tracking-widest uppercase mb-3">{t.liveSuggestionsTitle}</h4>
              {liveState?.languageNote && (
                <div className="mb-4 p-3 bg-amber-100/50 border border-amber-200 rounded-xl text-amber-900 text-sm flex items-start gap-2">
                  <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
@@ -461,7 +470,7 @@ export function LiveInterviewPanel({
                  ))
                ) : (
                  <div className="h-full flex items-center justify-center text-blue-300 text-sm font-medium">
-                   Escuchando para sugerir...
+                   {t.liveListeningForSuggestions}
                  </div>
                )}
              </div>
@@ -474,15 +483,14 @@ export function LiveInterviewPanel({
       {showConsentModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
           <div className="bg-white rounded-3xl p-8 max-w-md w-full shadow-2xl border-4 border-purple-500/20">
-            <h2 className="text-2xl font-serif font-bold text-gray-900 mb-4">Consentimiento de Grabación</h2>
+            <h2 className="text-2xl font-serif font-bold text-gray-900 mb-4">{t.liveConsentTitle}</h2>
             <p className="text-gray-600 mb-6 leading-relaxed">
-              La ley de Florida requiere el consentimiento de <strong>todas las partes</strong> para grabar audio. 
-              La app escuchará y transcribirá la conversación para asistir en la evaluación. El audio no se almacena permanentemente.
+              {t.liveConsentNotice}
             </p>
             <label className="flex items-start gap-3 p-4 bg-gray-50 rounded-xl border border-gray-200 cursor-pointer mb-8 hover:bg-purple-50 transition-colors">
               <input type="checkbox" id="consentCheckbox" className="mt-1 w-5 h-5 rounded border-gray-300 text-purple-600 focus:ring-purple-500" />
               <span className="text-sm font-medium text-gray-800 leading-snug">
-                Confirmo que he informado al candidato y he obtenido su consentimiento verbal para escuchar y transcribir esta entrevista.
+                {t.liveConsentCheckLabel}
               </span>
             </label>
             <div className="flex justify-end gap-3">
@@ -490,7 +498,7 @@ export function LiveInterviewPanel({
                 onClick={() => setShowConsentModal(false)}
                 className="px-5 py-2.5 text-gray-600 font-bold hover:bg-gray-100 rounded-xl transition-colors"
               >
-                Cancelar
+                {t.liveConsentCancel}
               </button>
               <button 
                 onClick={() => {
@@ -498,12 +506,12 @@ export function LiveInterviewPanel({
                   if (cb && cb.checked) {
                     handleConsent();
                   } else {
-                    alert("Debes confirmar la casilla para continuar.");
+                    alert(t.liveConsentAlert);
                   }
                 }}
                 className="px-5 py-2.5 bg-purple-600 hover:bg-purple-700 text-white font-bold rounded-xl transition-colors"
               >
-                Confirmar e Iniciar
+                {t.liveConsentConfirmBtn}
               </button>
             </div>
           </div>
