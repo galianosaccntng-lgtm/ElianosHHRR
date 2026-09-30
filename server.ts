@@ -449,7 +449,8 @@ function generateLocalEvaluation(session: any): string {
 
 ### Coffee Knowledge & Training Needs
 - **Coffee Knowledge & Experience Level**: Pending manual review of transcript (Diagnostic only; no previous experience required).
-- **Estimated onboarding time / training focus**: To be calibrated during the in-person interview.` : "";
+- **Menu-learning readiness**: To be assessed based on candidate's willingness and onboarding drills for Ellianos' extensive menu.
+- **Estimated onboarding time**: To be calibrated during the in-person interview.` : "";
 
   return `# Candidate Interview Record (Manual Review Required)
 
@@ -653,15 +654,18 @@ REGLAS DE CONTENIDO:
      * Cierre, Honestidad y Compromiso
    - Marca mustPass: true en los bloques que son eliminatorios.
 ${(position || "Barista") === "Barista" ? `   - BLOQUE OBLIGATORIO PARA BARISTA:
-     Debes incluir OBLIGATORIAMENTE un bloque titulado "${lang === 'en' ? 'Coffee Knowledge & Drink Recipes' : 'Conocimiento técnico de café / recetas'}" con mustPass: false (FORMATIVO / NO ELIMINATORIO).
-     * Objetivo del bloque: Calibrar el nivel técnico del candidato en preparación de bebidas de café y dimensionar las necesidades y semanas de entrenamiento requeridas (NUNCA para descartar).
+     Debes incluir OBLIGATORIAMENTE un bloque titulado "${lang === 'en' ? 'Coffee Knowledge and Drink Recipes' : 'Conocimiento técnico de café y recetas'}" con mustPass: false (FORMATIVO / NO ELIMINATORIO).
+     * Objetivo del bloque: Calibrar el nivel técnico real del candidato en preparación de bebidas estándar de café y evaluar su método para memorizar el amplio menú de Ellianos (NUNCA para descartarlo).
      * Minutos: 8 a 10 min.
      * Preguntas prácticas (2 a 3 preguntas en el bloque):
-       - Preguntas técnicas sobre recetas: diferencias entre latte, cortado, cappuccino y macchiato; qué parámetros definen un buen shot de espresso (tiempo ~25-30s, crema espesa dorada/avellana, balance dulce-ácido vs quemado/subextraído); proporciones de leche y microespuma; o preparación de bebidas emblemáticas de Ellianos (Caramel Macchiato, Tuscany Toffee, Mocha, o blended Freezers).
-       - Si el candidato no tiene experiencia previa: preguntas sobre su entusiasmo, curiosidad y facilidad para memorizar recetas y seguir procesos técnicos paso a paso.
-     * Qué escuchar (listenFor): Entusiasmo por el café, curiosidad por aprender la técnica de Ellianos, respeto por la consistencia de recetas, o destreza técnica sólida si ya fue barista.
+       - Preguntas técnicas de café ESTÁNDAR (las que cualquier barista con experiencia conoce): p. ej. diferencias entre macchiato y latte; qué distingue a un Caffe Breve (leche half-and-half) de un latte regular; cappuccino vs latte (proporción de microespuma); cold brew vs iced coffee; cómo reconocer un shot de espresso bien extraído (~25-30s, crema dorada) frente a uno amargo/quemado.
+       - Pregunta sobre el MENÚ EXTENSO: Preguntar cómo se organiza para memorizar y dominar un menú amplio y variado (signatures, freezers, shakes, smoothies, Red Bull Rush, Ellianos Edge, comidas) manteniendo velocidad y precisión bajo presión.
+       - Si el candidato no tiene experiencia previa: preguntas enfocadas en su actitud positiva, ganas de aprender y hábitos para retener recetas y procedimientos técnicos.
+       - CRITERIO DEL ÁREA Y CONOCIMIENTO TRANSFERIBLE: Evaluar la comprensión GENERAL del oficio de barista, NO el acierto o fallo de un nombre específico de bebida. Si el candidato desconoce un término (como Caffe Breve), indagar sobre el CONCEPTO (ej: vaporizar half-and-half en vez de leche) o pasar a otro fundamento; reconocer que un barista con experiencia en otra cadena con menú diferente transfiere sus habilidades rápidamente a Ellianos.
+       - REGLA CRÍTICA: NO preguntar por las recetas secretas propietarias de Ellianos (Caffe Dolce, Tuscany Toffee, Carmella, Joy Shot) como si las debiera saber de antemano.
+     * Qué escuchar (listenFor): Entusiasmo por el café, curiosidad por dominar la técnica de Ellianos, métodos claros para estudiar y memorizar recetas, respeto por la consistencia de bebidas, o destreza técnica sólida si ya fue barista.
      * Alertas (redFlags): Resistencia a seguir recetas estandarizadas o arrogancia frente a los estándares de la marca. (IMPORTANTE: La falta de experiencia previa o no saber recetas NO es una alerta roja ni motivo de descarte).
-   - NOTA DE DECISIÓN PARA BARISTA: En los criterios de decisión ("decision"), el bloque de conocimiento técnico de café es FORMATIVO (mustPass: false). Ningún candidato a Barista debe ser declinado ("decline") por falta de experiencia en café si cumple los bloques eliminatorios de actitud, ritmo y compromiso, ya que Ellianos entrena desde cero.` : ''}
+   - NOTA DE DECISIÓN PARA BARISTA: En los criterios de decisión ("decision"), el bloque de conocimiento técnico de café y recetas es FORMATIVO (mustPass: false). Ningún candidato a Barista debe ser declinado ("decline") por falta de experiencia en café si cumple los bloques eliminatorios de actitud, ritmo y compromiso, ya que Ellianos entrena desde cero.` : ''}
 3. ANCLAJE OBLIGATORIO EN SU TRANSCRIPCIÓN:
    - Cita textualmente afirmaciones que el candidato hizo por escrito: "Por escrito mencionaste que [CITA] — cuéntame un caso real donde ocurrió: qué hiciste tú exactamente y cuál fue el resultado numérico/operativo".
    - Cada debilidad identificada en la evaluación debe tener al menos una pregunta que la explore a fondo.
@@ -1210,20 +1214,39 @@ BRAND PHILOSOPHY & ATTITUDE:
 At Ellianos Coffee, ANYONE can apply and previous barista experience is NEVER required. We provide comprehensive paid training. Maintain a welcoming, warm, supportive, and encouraging tone throughout.
 Core Focus: Evaluate positive attitude, customer service warmth, physical resilience (standing for hours, lifting up to 30 lbs), speed in tight 800 sq ft kiosk spaces, coachability, and multitasking memory.
 
-TECHNICAL COFFEE KNOWLEDGE CALIBRATION (MEASURE LEVEL, NEVER DISQUALIFY):
-Within your progressive difficulty escalation, naturally incorporate coffee and beverage questions whose purpose is to MEASURE THE LEVEL OF EXPERIENCE, not eliminate or filter out:
-- If the candidate indicates, claims, or demonstrates previous barista or coffee shop experience:
-  * Ask 2 to 3 concrete technical questions to verify their true depth of knowledge. Examples:
-    - Differences between espresso drinks: e.g. macchiato vs latte vs cappuccino vs cortado vs americano; espresso-to-milk ratios; milk foam texture (silky microfoam for latte vs thick airy foam for cappuccino).
-    - Espresso extraction: what constitutes a standard espresso shot, how to recognize a well-extracted shot (timing ~25-30 seconds, rich crema with golden-brown tiger striping, balanced sweet/acidity vs bitter/burnt over-extraction or sour under-extraction).
-    - Beverage preparation: how they would craft specific drinks, including Ellianos favorites (Caramel Macchiato with vanilla, steamed milk, espresso shots marked on top, and caramel drizzle; flavored lattes like Tuscany Toffee or Venetian Vanilla; blended Freezers; or Lotus Energy plant-based infusions).
-    - Dynamically calibrate depth: if they answer with precision, explore nuances (e.g. grind size adjustments or plant-based milks like oat/almond); if they struggle with technical jargon, do NOT press aggressively or embarrass them—pivot smoothly.
-- If the candidate states they have NO prior barista experience:
-  * DO NOT penalize them or make them feel inadequate in any way.
-  * Reassure them briefly and warmly that having no coffee experience is completely fine because Ellianos provides full paid training on espresso crafting and recipes.
-  * Calibrate their coachability, customer familiarity, and eagerness to learn: ask what drinks they enjoy as a coffee customer, if they know common beverage styles, and how excited they feel about mastering the espresso bar and Ellianos drink recipes.
-- STRICT NON-ELIMINATORY RULE:
-  These questions are strictly to calibrate their onboarding training level, NOT an exam they can pass or fail. NEVER reject, disqualify, or degrade the evaluation of a candidate solely for not knowing how to prepare coffee drinks. A candidate with zero experience but excellent customer warmth, teamwork, and reliability is a prime hire!`;
+ELLIANOS REAL MENU REFERENCE:
+- Signature Drinks (proprietary recipes): Caffe Dolce, Tuscany Toffee, Venetian Vanilla Creme, Milan Mint Mocha, Sicilian Smoothie, Cookies & Cream Freezer.
+- Brews: Caffe Latte, Carmella, Caffe Mocha, White Mocha, Caffe Breve, Joy Shot, Coffee Cooler, Drip/Iced Coffee, Sweet Tea.
+- Blends: Freezers (blended espresso/coffee: Turtle, Caramel, White Mocha, Tuxedo, Carmella, Dark Mocha); Shakes (Banana, Vanilla, Cake Shake, S'mores, Cookies & Cream); Smoothies (Strawberry, Piña Colada, Strawberry Banana, Berry Blast).
+- Boosts & Energy: Red Bull Rush (Blackberry Watermelon, Peachy Keen, Sicilian, Blue Raspberry Swirl, or Create Your Own); Ellianos Edge (Piña Colada, Ocean Mist, Mango Tango, Berry Crush, Blue Wave, or Create Your Own); Cold Brew (Vanilla Sweet Cream or Create Your Own); Lemonade (Original, SunnyBrew, or flavored); Teas (Chai Tea Latte, Matcha); Refreshers (Strawberry Dragonfruit).
+- Food: Breakfast Sandwiches, Egg Bites, Grit Bowls, Bagels, Lunch Sandwiches, Muffins/Fritters, Cake Pops, Cookies & Brownies.
+- Formats: Almost all drinks come Hot / Iced / Frozen and in sizes S/M/L/XL (XL only in Iced and Frozen).
+
+TECHNICAL COFFEE QUESTIONS & CALIBRATION (MEASURE AREA UNDERSTANDING, NEVER DISQUALIFY):
+Within your progressive difficulty escalation, naturally incorporate coffee and beverage questions whose purpose is to MEASURE THE GENERAL UNDERSTANDING OF THE BARISTA CRAFT, not eliminate, filter out, or judge on an isolated question:
+1. If the candidate indicates, claims, or demonstrates previous barista or coffee shop experience:
+   - Ask 2 to 3 STANDARD technical coffee questions (broad concepts any experienced barista should know). Examples:
+     * Differences between drink families & proportions: difference between a macchiato and a latte; what distinguishes a Caffe Breve (prepared with half-and-half / light cream instead of milk) from a latte; difference between cappuccino and latte (proportion and density of microfoam); cold brew vs iced coffee (extraction time, brew method, acidity).
+     * Espresso extraction: what is a standard espresso shot, how to tell a well-extracted shot (timing ~25-30 seconds, golden-hazelnut crema with tiger striping, balanced sweetness/acidity vs burnt/bitter over-extracted or sour under-extracted).
+     * Milk steaming & texturing: achieving silky microfoam vs airy foam; steaming temperatures (~140-155°F).
+     * Mocha vs white mocha preparation.
+   - PIVOT ON MISSING SPECIFIC NAMES (CRITICAL):
+     * If the candidate does NOT know or hesitates on a specific beverage name (such as "Caffe Breve" or a specific term): DO NOT penalize them or downgrade their assessed level! Different coffee shops and regional chains use entirely different names and menus. A fantastic experienced barista might come from a chain that simply didn't serve that item under that name.
+     * In that case, either ask about the underlying CONCEPT rather than the term (e.g.: "No problem at all! Have you ever steamed half-and-half or heavy cream instead of regular milk for a rich espresso drink?"), OR smoothly pivot to another fundamental area (like espresso extraction or steaming texture), without pressing, insisting, or making the candidate feel bad.
+   - AGGREGATE PICTURE EVALUATION:
+     * Assess their level from the FULL PANORAMA of their responses across core craft fundamentals (espresso extraction, milk steaming, drink families, workflow rhythm), NEVER from a single drink name or isolated response.
+     * RECOGNIZE TRANSFERABLE KNOWLEDGE: An experienced barista who knows espresso extraction and milk texturing will learn the Ellianos specific recipes and drink names very quickly once shown during training.
+   - CRITICAL PROPRIETARY DRINK RESTRICTION: NEVER ask the candidate about Ellianos proprietary drinks (like Caffe Dolce, Tuscany Toffee, Carmella, or Joy Shot) as if they should already know their recipes. Nobody knows them without having worked at Ellianos! Use proprietary drinks ONLY to:
+     (a) verify past claims if a candidate explicitly says they already worked at an Ellianos Coffee location, or
+     (b) illustrate the rich, exciting menu they will learn during training.
+2. Capacity & Willingness to Learn an Extensive Menu (MANDATORY TO EVALUATE):
+   - Explicitly evaluate their capacity and disposition to learn an extensive menu: mention that Ellianos has a large menu (signature drinks, freezers, shakes, smoothies, energy drinks, teas, and food) and ask how they organize themselves to memorize recipes and maintain fast speed-of-service in the drive-thru. This is key to estimating onboarding time.
+3. If the candidate states they have NO prior barista experience:
+   - DO NOT penalize them or make them feel inadequate in any way.
+   - Reassure them briefly and warmly that having no coffee experience is completely fine because Ellianos provides full paid training.
+   - Calibrate their coachability, customer familiarity (what they like to order as coffee customers), and eagerness to learn the craft and recipes.
+4. STRICT NON-ELIMINATORY RULE:
+   These questions are strictly to calibrate their onboarding training level, NOT an exam they can pass or fail. NEVER reject, disqualify, or degrade the evaluation of a candidate solely for not knowing how to prepare coffee drinks. A candidate with zero experience but excellent customer warmth, quick learner mindset, and strong reliability is a prime hire!`;
     } else if (position === "Shift Leader") {
       roleInstruction = `Position: Shift Leader. Focus: Evaluate quick problem solving, workflow management, and empathetic leadership. Start with basic team dynamics before moving to complex scenarios (e.g., equipment failure during peak hours, cash discrepancies).`;
     } else if (position === "Store Manager") {
@@ -1306,14 +1329,18 @@ You must include:
 4. A final recommendation (Hire, Do Not Hire, or Second Interview).
 5. AUTHENTICITY ASSESSMENT: For each response you are given a computed human-authorship confidence percentage (from typing behavior). In the 'Authenticity Signals' section, report: the average confidence, the lowest-confidence answer (number and percentage), and whether the writing-style analysis agrees or disagrees with these numbers. Answers below 35% should be explicitly listed. Remember: these are signals for follow-up, never automatic rejection. Consider: paste attempts, unusually high WPM (>80 sustained), large single-event text insertions, tab switches right before polished answers, very short response delays for long complex answers, and abrupt style/register shifts between answers. Non-native English speakers may write formally; do not flag formal writing alone. Never lower the candidate's score solely because of authenticity signals — report them separately.
 ${position === "Barista" ? `
-6. COFFEE KNOWLEDGE & TRAINING NEEDS (BARISTA POSITION ONLY):
-Include a dedicated section titled "### Coffee Knowledge & Training Needs":
-- **Coffee Knowledge & Experience Level**: Classify the candidate into EXACTLY one of these three diagnostic tiers:
-  * **"Ready for the bar"** (Solid technical knowledge of espresso extraction, steaming, ratios, and recipes; requires minimal training beyond Ellianos speed/menu specifics).
-  * **"Basic training needed"** (Some basic coffee foundation, home barista familiarity, or customer-level drink awareness; needs standard onboarding on commercial espresso equipment and recipe execution).
-  * **"Full training needed"** (No technical coffee experience; enthusiastic beginner starting from scratch).
-  Cite direct evidence or quotes from what the candidate said about coffee/drinks in the transcript.
-- **Estimated onboarding time / training focus**: Exactly one concise sentence stating estimated onboarding training time and what to focus on (e.g., "Estimated onboarding: 2-3 weeks; focus on recipe memorization, milk steaming microfoam consistency, and drive-thru bar speed before flying solo").
+6. COFFEE KNOWLEDGE, MENU LEARNING & TRAINING NEEDS (BARISTA POSITION ONLY):
+Include a dedicated section in your Markdown report titled "### Coffee Knowledge & Training Needs":
+- **Coffee Knowledge & Experience Level**: Classify the candidate into EXACTLY one of these three tiers:
+  * **"Ready for the bar"**: Solid aggregate grasp of foundational barista craft (espresso extraction principles, milk steaming/microfoam, drink families). Requires minimal training beyond learning Ellianos proprietary recipes and drive-thru workflow.
+  * **"Basic training needed"**: Some basic coffee foundation, home barista experience, customer-level drink familiarity, or general food service; needs standard structured training on commercial equipment and recipe execution.
+  * **"Full training needed"**: No prior technical coffee experience; enthusiastic beginner starting from scratch.
+  EVALUATION PRINCIPLE (AGGREGATE UNDERSTANDING & TRANSFERABLE KNOWLEDGE):
+  * Base this classification strictly on their FULL PANORAMA of craft fundamentals (espresso extraction, milk steaming, drink families, workflow), NEVER docking their tier for failing or not knowing a single drink name (e.g., "Caffe Breve" or specific brand jargon).
+  * Explicitly indicate if the candidate comes from another coffee chain with a different menu/nomenclature: recognize that solid foundational barista skills are highly TRANSFERABLE, and that an experienced barista learns Ellianos-specific drinks and recipes rapidly once shown.
+  * Cite direct quotes and evidence from what the candidate said about coffee/drinks in the transcript.
+- **Menu-learning readiness**: Assess how quickly they could master the extensive Ellianos menu (signatures, freezers, shakes, smoothies, Red Bull Rush, Ellianos Edge, food) based on their memory habits, organizational strategy, or past learning experiences, and state what to focus on in training (e.g. recipe memorization drills, drive-thru bar speed, frozen/energy drinks).
+- **Estimated onboarding time**: Exactly one concise sentence stating estimated onboarding training time and main focus (e.g., "Estimated onboarding: 2-3 weeks; focus on recipe memorization for the blended and energy lines, milk steaming microfoam consistency, and drive-thru bar speed before flying solo").
 - CRITICAL SCORING & HIRING DIRECTIVE: Ellianos Coffee actively welcomes candidates with ZERO previous experience. This technical classification is strictly informative for onboarding planning. IT MUST NEVER BY ITSELF LOWER THE CANDIDATE'S OVERALL SCORE OR LEAD TO A "DO NOT HIRE" RECOMMENDATION. The hiring recommendation and score must be based on attitude, reliability, customer warmth, coachability, work ethic, and ability to handle pressure.` : ""}
 
 Candidate Typing Metrics per Response:
