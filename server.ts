@@ -341,15 +341,16 @@ const ai = new GoogleGenAI({
 
 // Valid Gemini models prioritized by performance
 const RESILIENT_MODELS_POOL = [
+  "gemini-3.8-flash",
   "gemini-flash-latest",
-  "gemini-flash-lite-latest",
-  "gemini-2.5-flash",
+  "gemini-3.1-flash-lite",
 ];
 
 const INTERVIEW_QUESTIONS: Record<string, string[]> = {
   "Barista": [
     "What made you interested in applying for a Barista position with Ellianos Coffee?",
     "Our drive-thru moves very fast during morning rush hours. How do you maintain a positive, energetic attitude when there is a long line of cars?",
+    "Whether you have previous barista experience or this is your very first coffee job, what is your familiarity with espresso drinks? (For example, have you prepared them before, or are you an enthusiastic coffee lover eager to learn our recipes?)",
     "Working in an 800 sq ft double drive-thru kiosk means space is tight and teamwork is crucial. Can you describe how you communicate with coworkers in tight spaces?",
     "Punctuality is critical for our morning opening shifts. Do you have reliable transportation and flexibility for morning or weekend hours?",
     "How do you handle a situation where a customer is unhappy with their coffee or espresso drink?",
@@ -444,6 +445,12 @@ function generateLocalEvaluation(session: any): string {
 - **Métricas:** No se registraron datos de telemetría en esta sesión.`;
   }
 
+  const baristaBlock = (position || "Barista") === "Barista" ? `
+
+### Coffee Knowledge & Training Needs
+- **Coffee Knowledge & Experience Level**: Pending manual review of transcript (Diagnostic only; no previous experience required).
+- **Estimated onboarding time / training focus**: To be calibrated during the in-person interview.` : "";
+
   return `# Candidate Interview Record (Manual Review Required)
 
 **Candidate Name:** ${candidateName}  
@@ -457,7 +464,7 @@ function generateLocalEvaluation(session: any): string {
 ### AI Evaluation Status: Unavailable
 La evaluación con IA no estaba disponible en el momento del envío. No se generó puntaje ni recomendación automática. Por favor revise la transcripción completa manualmente para evaluar la idoneidad del candidato.
 
-${authenticityBlock}`;
+${authenticityBlock}${baristaBlock}`;
 }
 
 async function generateContentWithInfiniteResilience(request: any) {
@@ -645,6 +652,16 @@ REGLAS DE CONTENIDO:
      * Adaptación al Modelo Ellianos (800 ft², drive-thru doble, aperturas de madrugada, apertura tienda Lehigh Acres en octubre)
      * Cierre, Honestidad y Compromiso
    - Marca mustPass: true en los bloques que son eliminatorios.
+${(position || "Barista") === "Barista" ? `   - BLOQUE OBLIGATORIO PARA BARISTA:
+     Debes incluir OBLIGATORIAMENTE un bloque titulado "${lang === 'en' ? 'Coffee Knowledge & Drink Recipes' : 'Conocimiento técnico de café / recetas'}" con mustPass: false (FORMATIVO / NO ELIMINATORIO).
+     * Objetivo del bloque: Calibrar el nivel técnico del candidato en preparación de bebidas de café y dimensionar las necesidades y semanas de entrenamiento requeridas (NUNCA para descartar).
+     * Minutos: 8 a 10 min.
+     * Preguntas prácticas (2 a 3 preguntas en el bloque):
+       - Preguntas técnicas sobre recetas: diferencias entre latte, cortado, cappuccino y macchiato; qué parámetros definen un buen shot de espresso (tiempo ~25-30s, crema espesa dorada/avellana, balance dulce-ácido vs quemado/subextraído); proporciones de leche y microespuma; o preparación de bebidas emblemáticas de Ellianos (Caramel Macchiato, Tuscany Toffee, Mocha, o blended Freezers).
+       - Si el candidato no tiene experiencia previa: preguntas sobre su entusiasmo, curiosidad y facilidad para memorizar recetas y seguir procesos técnicos paso a paso.
+     * Qué escuchar (listenFor): Entusiasmo por el café, curiosidad por aprender la técnica de Ellianos, respeto por la consistencia de recetas, o destreza técnica sólida si ya fue barista.
+     * Alertas (redFlags): Resistencia a seguir recetas estandarizadas o arrogancia frente a los estándares de la marca. (IMPORTANTE: La falta de experiencia previa o no saber recetas NO es una alerta roja ni motivo de descarte).
+   - NOTA DE DECISIÓN PARA BARISTA: En los criterios de decisión ("decision"), el bloque de conocimiento técnico de café es FORMATIVO (mustPass: false). Ningún candidato a Barista debe ser declinado ("decline") por falta de experiencia en café si cumple los bloques eliminatorios de actitud, ritmo y compromiso, ya que Ellianos entrena desde cero.` : ''}
 3. ANCLAJE OBLIGATORIO EN SU TRANSCRIPCIÓN:
    - Cita textualmente afirmaciones que el candidato hizo por escrito: "Por escrito mencionaste que [CITA] — cuéntame un caso real donde ocurrió: qué hiciste tú exactamente y cuál fue el resultado numérico/operativo".
    - Cada debilidad identificada en la evaluación debe tener al menos una pregunta que la explore a fondo.
@@ -1188,7 +1205,25 @@ TONE: Professional, welcoming, and encouraging, yet rigorous. Guide them from ba
 
     let roleInstruction = "";
     if (position === "Barista") {
-      roleInstruction = `Position: Barista. Focus: Evaluate positive attitude, physical resilience (standing for hours, lifting up to 30 lbs), and extreme multitasking memory. Remember: anyone can apply and previous experience is NOT required. Frame questions to find out their natural disposition before testing their limits.`;
+      roleInstruction = `Position: Barista.
+BRAND PHILOSOPHY & ATTITUDE:
+At Ellianos Coffee, ANYONE can apply and previous barista experience is NEVER required. We provide comprehensive paid training. Maintain a welcoming, warm, supportive, and encouraging tone throughout.
+Core Focus: Evaluate positive attitude, customer service warmth, physical resilience (standing for hours, lifting up to 30 lbs), speed in tight 800 sq ft kiosk spaces, coachability, and multitasking memory.
+
+TECHNICAL COFFEE KNOWLEDGE CALIBRATION (MEASURE LEVEL, NEVER DISQUALIFY):
+Within your progressive difficulty escalation, naturally incorporate coffee and beverage questions whose purpose is to MEASURE THE LEVEL OF EXPERIENCE, not eliminate or filter out:
+- If the candidate indicates, claims, or demonstrates previous barista or coffee shop experience:
+  * Ask 2 to 3 concrete technical questions to verify their true depth of knowledge. Examples:
+    - Differences between espresso drinks: e.g. macchiato vs latte vs cappuccino vs cortado vs americano; espresso-to-milk ratios; milk foam texture (silky microfoam for latte vs thick airy foam for cappuccino).
+    - Espresso extraction: what constitutes a standard espresso shot, how to recognize a well-extracted shot (timing ~25-30 seconds, rich crema with golden-brown tiger striping, balanced sweet/acidity vs bitter/burnt over-extraction or sour under-extraction).
+    - Beverage preparation: how they would craft specific drinks, including Ellianos favorites (Caramel Macchiato with vanilla, steamed milk, espresso shots marked on top, and caramel drizzle; flavored lattes like Tuscany Toffee or Venetian Vanilla; blended Freezers; or Lotus Energy plant-based infusions).
+    - Dynamically calibrate depth: if they answer with precision, explore nuances (e.g. grind size adjustments or plant-based milks like oat/almond); if they struggle with technical jargon, do NOT press aggressively or embarrass them—pivot smoothly.
+- If the candidate states they have NO prior barista experience:
+  * DO NOT penalize them or make them feel inadequate in any way.
+  * Reassure them briefly and warmly that having no coffee experience is completely fine because Ellianos provides full paid training on espresso crafting and recipes.
+  * Calibrate their coachability, customer familiarity, and eagerness to learn: ask what drinks they enjoy as a coffee customer, if they know common beverage styles, and how excited they feel about mastering the espresso bar and Ellianos drink recipes.
+- STRICT NON-ELIMINATORY RULE:
+  These questions are strictly to calibrate their onboarding training level, NOT an exam they can pass or fail. NEVER reject, disqualify, or degrade the evaluation of a candidate solely for not knowing how to prepare coffee drinks. A candidate with zero experience but excellent customer warmth, teamwork, and reliability is a prime hire!`;
     } else if (position === "Shift Leader") {
       roleInstruction = `Position: Shift Leader. Focus: Evaluate quick problem solving, workflow management, and empathetic leadership. Start with basic team dynamics before moving to complex scenarios (e.g., equipment failure during peak hours, cash discrepancies).`;
     } else if (position === "Store Manager") {
@@ -1270,6 +1305,16 @@ You must include:
 3. A summary of their weaknesses or areas of concern.
 4. A final recommendation (Hire, Do Not Hire, or Second Interview).
 5. AUTHENTICITY ASSESSMENT: For each response you are given a computed human-authorship confidence percentage (from typing behavior). In the 'Authenticity Signals' section, report: the average confidence, the lowest-confidence answer (number and percentage), and whether the writing-style analysis agrees or disagrees with these numbers. Answers below 35% should be explicitly listed. Remember: these are signals for follow-up, never automatic rejection. Consider: paste attempts, unusually high WPM (>80 sustained), large single-event text insertions, tab switches right before polished answers, very short response delays for long complex answers, and abrupt style/register shifts between answers. Non-native English speakers may write formally; do not flag formal writing alone. Never lower the candidate's score solely because of authenticity signals — report them separately.
+${position === "Barista" ? `
+6. COFFEE KNOWLEDGE & TRAINING NEEDS (BARISTA POSITION ONLY):
+Include a dedicated section titled "### Coffee Knowledge & Training Needs":
+- **Coffee Knowledge & Experience Level**: Classify the candidate into EXACTLY one of these three diagnostic tiers:
+  * **"Ready for the bar"** (Solid technical knowledge of espresso extraction, steaming, ratios, and recipes; requires minimal training beyond Ellianos speed/menu specifics).
+  * **"Basic training needed"** (Some basic coffee foundation, home barista familiarity, or customer-level drink awareness; needs standard onboarding on commercial espresso equipment and recipe execution).
+  * **"Full training needed"** (No technical coffee experience; enthusiastic beginner starting from scratch).
+  Cite direct evidence or quotes from what the candidate said about coffee/drinks in the transcript.
+- **Estimated onboarding time / training focus**: Exactly one concise sentence stating estimated onboarding training time and what to focus on (e.g., "Estimated onboarding: 2-3 weeks; focus on recipe memorization, milk steaming microfoam consistency, and drive-thru bar speed before flying solo").
+- CRITICAL SCORING & HIRING DIRECTIVE: Ellianos Coffee actively welcomes candidates with ZERO previous experience. This technical classification is strictly informative for onboarding planning. IT MUST NEVER BY ITSELF LOWER THE CANDIDATE'S OVERALL SCORE OR LEAD TO A "DO NOT HIRE" RECOMMENDATION. The hiring recommendation and score must be based on attitude, reliability, customer warmth, coachability, work ethic, and ability to handle pressure.` : ""}
 
 Candidate Typing Metrics per Response:
 ${metricsSummary || "No typing telemetry available."}
@@ -1853,6 +1898,7 @@ The interviewer needs a STABLE ("sticky") question that DOES NOT flicker or chan
    - If one or more must-pass blocks are clearly failing (settled with liveRating 1 or 2) and the candidate shows aptitude for another position (e.g., lacks supervisory skills for Store Manager but has great speed and customer attitude for Barista or Shift Leader), set "positionSuggestion": { "suggest": true, "position": "<another position>", "reason": "1-2 brief sentences in ${langName} explaining the recommendation" }.
    - If the candidate is performing adequately, blocks are not settled yet, or evidence is inconclusive, set "positionSuggestion": { "suggest": false, "position": "${currentRole}", "reason": "" }.
    - Do NOT suggest role changes prematurely or repetitively if the interview is just beginning.
+   - For Barista candidates, remember that "Coffee Knowledge & Drink Recipes" / "Conocimiento técnico de café / recetas" is strictly a formative block (mustPass: false). Lack of prior technical knowledge in coffee is never a reason to suggest changing positions or failing a candidate, as Ellianos trains baristas from scratch.
 
 Return a strict JSON object with this structure:
 {
