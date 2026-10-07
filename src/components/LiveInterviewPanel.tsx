@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { mapLiveStateToScores } from '../patch';
 import { InterviewSession, LiveInterviewState, SecondInterviewBlock, LiveInterviewFinalEvaluation, Position } from '../types';
-import { Mic, Square, Pause, AlertCircle, Play, CheckCircle2, Circle, Loader2, RotateCcw, Sparkles, Copy, Check, Printer, AlertTriangle, XCircle, Star, Briefcase, ArrowRightCircle, RefreshCw } from 'lucide-react';
+import { Mic, Square, Pause, AlertCircle, Play, CheckCircle2, Circle, Loader2, RotateCcw, Sparkles, Copy, Check, Printer, AlertTriangle, XCircle, Star, Briefcase, ArrowRightCircle, RefreshCw, Calendar, Clock } from 'lucide-react';
 import { adminI18n, AdminLang } from '../i18n-admin';
 
 function escapeHtml(str: string): string {
@@ -39,6 +39,28 @@ function formatFinalEvaluationAsText(evalData: LiveInterviewFinalEvaluation, can
   if (evalData.inconsistenciesWithOnlineInterview && evalData.inconsistenciesWithOnlineInterview.length > 0) {
     text += `--- ${t.liveInconsistenciesTitle.toUpperCase()} ---\n`;
     evalData.inconsistenciesWithOnlineInterview.forEach((inc) => { text += `⚠️ ${inc}\n`; });
+    text += `\n`;
+  }
+
+  if (evalData.confirmedAvailability) {
+    const openingLabel = evalData.confirmedAvailability.openingShifts === 'YES' ? t.liveAvailYes : evalData.confirmedAvailability.openingShifts === 'NO' ? t.liveAvailNo : t.liveAvailConditional;
+    const closingLabel = evalData.confirmedAvailability.closingShifts === 'YES' ? t.liveAvailYes : evalData.confirmedAvailability.closingShifts === 'NO' ? t.liveAvailNo : t.liveAvailConditional;
+    const holidaysLabel = evalData.confirmedAvailability.holidays === 'YES' ? t.liveAvailYes : evalData.confirmedAvailability.holidays === 'NO' ? t.liveAvailNo : t.liveAvailConditional;
+    text += `* ${t.liveAvailTitle.toUpperCase()}:\n`;
+    text += `  - ${t.liveAvailOpeningShifts}: [${openingLabel}]\n`;
+    text += `  - ${t.liveAvailClosingShifts}: [${closingLabel}]\n`;
+    text += `  - ${t.liveAvailWeekends}: ${evalData.confirmedAvailability.weekends || '—'}\n`;
+    text += `  - ${t.liveAvailHolidays}: [${holidaysLabel}]\n`;
+    text += `  - ${t.liveAvailHoursPerWeek}: ${evalData.confirmedAvailability.hoursPerWeek || '—'}\n`;
+    if (evalData.confirmedAvailability.earliestArrival) {
+      text += `  - ${t.liveAvailEarliestArrival}: ${evalData.confirmedAvailability.earliestArrival}\n`;
+    }
+    if (evalData.confirmedAvailability.noticePeriodAndStartDate) {
+      text += `  - ${t.liveAvailNoticePeriod}: ${evalData.confirmedAvailability.noticePeriodAndStartDate}\n`;
+    }
+    if (evalData.confirmedAvailability.notes) {
+      text += `  - ${t.liveAvailNotes}: ${evalData.confirmedAvailability.notes}\n`;
+    }
     text += `\n`;
   }
 
@@ -214,6 +236,21 @@ function generatePrintableFinalEvaluationHtml(
     <ul style="margin:0 0 0 16px;padding:0;color:#78350f;font-size:12px;">
       ${evalData.inconsistenciesWithOnlineInterview.map(inc => `<li>${escapeHtml(inc)}</li>`).join('')}
     </ul>
+  </div>` : ''}
+
+  ${evalData.confirmedAvailability ? `
+  <div style="background:#f8fafc;border:1px solid #cbd5e1;padding:12px 16px;border-radius:10px;margin-bottom:16px;">
+    <strong style="color:#0f172a;display:block;margin-bottom:8px;font-size:13px;">${escapeHtml(t.liveAvailTitle)}</strong>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;font-size:12px;margin-bottom:8px;">
+      <div><strong>${escapeHtml(t.liveAvailOpeningShifts)}:</strong> <span style="font-weight:600;color:${evalData.confirmedAvailability.openingShifts === 'YES' ? '#059669' : evalData.confirmedAvailability.openingShifts === 'NO' ? '#dc2626' : '#d97706'}">${escapeHtml(evalData.confirmedAvailability.openingShifts === 'YES' ? t.liveAvailYes : evalData.confirmedAvailability.openingShifts === 'NO' ? t.liveAvailNo : t.liveAvailConditional)}</span></div>
+      <div><strong>${escapeHtml(t.liveAvailClosingShifts)}:</strong> <span style="font-weight:600;color:${evalData.confirmedAvailability.closingShifts === 'YES' ? '#059669' : evalData.confirmedAvailability.closingShifts === 'NO' ? '#dc2626' : '#d97706'}">${escapeHtml(evalData.confirmedAvailability.closingShifts === 'YES' ? t.liveAvailYes : evalData.confirmedAvailability.closingShifts === 'NO' ? t.liveAvailNo : t.liveAvailConditional)}</span></div>
+      <div><strong>${escapeHtml(t.liveAvailWeekends)}:</strong> <span>${escapeHtml(evalData.confirmedAvailability.weekends || '—')}</span></div>
+      <div><strong>${escapeHtml(t.liveAvailHolidays)}:</strong> <span style="font-weight:600;color:${evalData.confirmedAvailability.holidays === 'YES' ? '#059669' : evalData.confirmedAvailability.holidays === 'NO' ? '#dc2626' : '#d97706'}">${escapeHtml(evalData.confirmedAvailability.holidays === 'YES' ? t.liveAvailYes : evalData.confirmedAvailability.holidays === 'NO' ? t.liveAvailNo : t.liveAvailConditional)}</span></div>
+      <div><strong>${escapeHtml(t.liveAvailHoursPerWeek)}:</strong> <span>${escapeHtml(evalData.confirmedAvailability.hoursPerWeek || '—')}</span></div>
+      <div><strong>${escapeHtml(t.liveAvailEarliestArrival)}:</strong> <span>${escapeHtml(evalData.confirmedAvailability.earliestArrival || '—')}</span></div>
+      ${evalData.confirmedAvailability.noticePeriodAndStartDate ? `<div style="grid-column:span 2;"><strong>${escapeHtml(t.liveAvailNoticePeriod)}:</strong> <span>${escapeHtml(evalData.confirmedAvailability.noticePeriodAndStartDate)}</span></div>` : ''}
+    </div>
+    ${evalData.confirmedAvailability.notes ? `<div style="font-size:11px;color:#475569;border-top:1px solid #e2e8f0;padding-top:6px;line-height:1.4;"><strong>${escapeHtml(t.liveAvailNotes)}:</strong> ${escapeHtml(evalData.confirmedAvailability.notes)}</div>` : ''}
   </div>` : ''}
 
   <h2>${escapeHtml(t.liveFinalEvalNarrative)}</h2>
@@ -1591,6 +1628,128 @@ export function LiveInterviewPanel({
                 <div className="text-xs text-emerald-800 bg-emerald-50/80 p-3 rounded-lg border border-emerald-200 flex items-center gap-2">
                   <Check className="w-4 h-4 text-emerald-600 shrink-0" />
                   <span>{t.liveInconsistenciesNone}</span>
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Confirmed Operational Availability Card */}
+          {liveState.finalEvaluation.confirmedAvailability && (
+            <div className="mb-6 p-5 rounded-2xl bg-slate-50/80 border border-slate-200/90 shadow-xs">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 mb-4">
+                <h5 className="text-xs font-bold uppercase tracking-wider flex items-center gap-2 text-slate-800">
+                  <Calendar className="w-4 h-4 text-indigo-600" />
+                  <span>{t.liveAvailTitle}</span>
+                </h5>
+                <span className="text-[11px] font-semibold text-slate-600 bg-white px-2.5 py-1 rounded-lg border border-slate-200 self-start sm:self-auto">
+                  {t.liveAvailHoursPerWeek}: <strong className="text-slate-800">{liveState.finalEvaluation.confirmedAvailability.hoursPerWeek || '—'}</strong>
+                </span>
+              </div>
+
+              {/* Grid of Key Shift Commitments */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 mb-3">
+                {/* Opening shifts */}
+                <div className="p-3 bg-white rounded-xl border border-slate-200/80 flex flex-col justify-between">
+                  <span className="text-[11px] font-medium text-slate-600 mb-1 flex items-center gap-1">
+                    <Clock className="w-3 h-3 text-slate-400" />
+                    {t.liveAvailOpeningShifts}
+                  </span>
+                  <div className="flex items-center gap-1.5 mt-1">
+                    <span className={`text-[11px] font-bold px-2 py-0.5 rounded-md ${
+                      liveState.finalEvaluation.confirmedAvailability.openingShifts === 'YES'
+                        ? 'bg-emerald-100 text-emerald-800 border border-emerald-300'
+                        : liveState.finalEvaluation.confirmedAvailability.openingShifts === 'NO'
+                          ? 'bg-rose-100 text-rose-800 border border-rose-300'
+                          : 'bg-amber-100 text-amber-800 border border-amber-300'
+                    }`}>
+                      {liveState.finalEvaluation.confirmedAvailability.openingShifts === 'YES'
+                        ? t.liveAvailYes
+                        : liveState.finalEvaluation.confirmedAvailability.openingShifts === 'NO'
+                          ? t.liveAvailNo
+                          : t.liveAvailConditional}
+                    </span>
+                  </div>
+                </div>
+
+                {/* Closing shifts */}
+                <div className="p-3 bg-white rounded-xl border border-slate-200/80 flex flex-col justify-between">
+                  <span className="text-[11px] font-medium text-slate-600 mb-1 flex items-center gap-1">
+                    <Clock className="w-3 h-3 text-slate-400" />
+                    {t.liveAvailClosingShifts}
+                  </span>
+                  <div className="flex items-center gap-1.5 mt-1">
+                    <span className={`text-[11px] font-bold px-2 py-0.5 rounded-md ${
+                      liveState.finalEvaluation.confirmedAvailability.closingShifts === 'YES'
+                        ? 'bg-emerald-100 text-emerald-800 border border-emerald-300'
+                        : liveState.finalEvaluation.confirmedAvailability.closingShifts === 'NO'
+                          ? 'bg-rose-100 text-rose-800 border border-rose-300'
+                          : 'bg-amber-100 text-amber-800 border border-amber-300'
+                    }`}>
+                      {liveState.finalEvaluation.confirmedAvailability.closingShifts === 'YES'
+                        ? t.liveAvailYes
+                        : liveState.finalEvaluation.confirmedAvailability.closingShifts === 'NO'
+                          ? t.liveAvailNo
+                          : t.liveAvailConditional}
+                    </span>
+                  </div>
+                </div>
+
+                {/* Weekends */}
+                <div className="p-3 bg-white rounded-xl border border-slate-200/80 flex flex-col justify-between">
+                  <span className="text-[11px] font-medium text-slate-600 mb-1 flex items-center gap-1">
+                    <Calendar className="w-3 h-3 text-slate-400" />
+                    {t.liveAvailWeekends}
+                  </span>
+                  <span className="text-xs font-bold text-slate-800 truncate" title={liveState.finalEvaluation.confirmedAvailability.weekends}>
+                    {liveState.finalEvaluation.confirmedAvailability.weekends || '—'}
+                  </span>
+                </div>
+
+                {/* Holidays */}
+                <div className="p-3 bg-white rounded-xl border border-slate-200/80 flex flex-col justify-between">
+                  <span className="text-[11px] font-medium text-slate-600 mb-1 flex items-center gap-1">
+                    <Calendar className="w-3 h-3 text-slate-400" />
+                    {t.liveAvailHolidays}
+                  </span>
+                  <div className="flex items-center gap-1.5 mt-1">
+                    <span className={`text-[11px] font-bold px-2 py-0.5 rounded-md ${
+                      liveState.finalEvaluation.confirmedAvailability.holidays === 'YES'
+                        ? 'bg-emerald-100 text-emerald-800 border border-emerald-300'
+                        : liveState.finalEvaluation.confirmedAvailability.holidays === 'NO'
+                          ? 'bg-rose-100 text-rose-800 border border-rose-300'
+                          : 'bg-amber-100 text-amber-800 border border-amber-300'
+                    }`}>
+                      {liveState.finalEvaluation.confirmedAvailability.holidays === 'YES'
+                        ? t.liveAvailYes
+                        : liveState.finalEvaluation.confirmedAvailability.holidays === 'NO'
+                          ? t.liveAvailNo
+                          : t.liveAvailConditional}
+                    </span>
+                  </div>
+                </div>
+              </div>
+
+              {/* Granular Schedule & Start Details */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-3">
+                {liveState.finalEvaluation.confirmedAvailability.earliestArrival && (
+                  <div className="p-3 bg-white/90 rounded-xl border border-slate-200 text-xs text-slate-700">
+                    <strong className="block text-slate-900 mb-0.5 text-[11px] uppercase tracking-wider">{t.liveAvailEarliestArrival}:</strong>
+                    <span>{liveState.finalEvaluation.confirmedAvailability.earliestArrival}</span>
+                  </div>
+                )}
+                {liveState.finalEvaluation.confirmedAvailability.noticePeriodAndStartDate && (
+                  <div className="p-3 bg-white/90 rounded-xl border border-slate-200 text-xs text-slate-700">
+                    <strong className="block text-slate-900 mb-0.5 text-[11px] uppercase tracking-wider">{t.liveAvailNoticePeriod}:</strong>
+                    <span>{liveState.finalEvaluation.confirmedAvailability.noticePeriodAndStartDate}</span>
+                  </div>
+                )}
+              </div>
+
+              {/* Notes */}
+              {liveState.finalEvaluation.confirmedAvailability.notes && (
+                <div className="text-xs leading-relaxed text-slate-800 bg-white/90 p-3.5 rounded-xl border border-slate-200">
+                  <strong className="block text-slate-900 mb-1">{t.liveAvailNotes}:</strong>
+                  <p className="whitespace-pre-line font-medium text-slate-700">{liveState.finalEvaluation.confirmedAvailability.notes}</p>
                 </div>
               )}
             </div>

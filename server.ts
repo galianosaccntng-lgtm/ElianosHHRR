@@ -671,9 +671,24 @@ REGLAS DE CONTENIDO:
      * Experiencia Real Verificable (mustPass: true)
      * Conocimiento Operativo & Resistencia bajo Presión (mustPass: true)
      * Inglés Funcional para Atención al Cliente (language: "en") (${isSpanishSpeaker ? "mustPass: true" : "mustPass: false"})
-     * Adaptación al Modelo Ellianos (800 ft², drive-thru doble, aperturas de madrugada, apertura tienda Lehigh Acres en octubre)
+     * Adaptación al Modelo Ellianos y Disponibilidad Operativa (mustPass: true - OBLIGATORIO)
      * Cierre, Honestidad y Compromiso
    - Marca mustPass: true en los bloques que son eliminatorios.
+   - BLOQUE OBLIGATORIO: ADAPTACIÓN AL MODELO ELLIANOS Y DISPONIBILIDAD OPERATIVA (mustPass: true):
+     Debes incluir OBLIGATORIAMENTE un bloque titulado "${lang === 'en' ? 'Ellianos Model Fit & Availability' : 'Adaptación al Modelo Ellianos y Disponibilidad'}" con mustPass: true (BLOQUE ELIMINATORIO).
+     * Contexto operativo: La tienda es un drive-thru de doble carril de 800 sq ft con turnos de apertura temprana de madrugada (~5:00–5:30 AM), turnos de cierre, fines de semana y días festivos, operando con personal mínimo (lean-staffed). La disponibilidad precisa es crítica.
+     * Preguntas operativas obligatorias (3 a 4 preguntas en el bloque):
+       - ANCLAJE EN LO DECLARADO: Formula las preguntas citando lo que el candidato declaró por escrito en la entrevista online (ej: "${lang === 'en' ? 'In your written interview you stated you are available [X]; what is the earliest arrival time you can commit to on each of those days, and could you cover early morning openings (~5:00–5:30 AM)?' : 'Por escrito dijiste que estás disponible [X]; ¿cuál es la hora más temprana que puedes llegar esos días y podrías cubrir aperturas de madrugada (~5:00–5:30 AM)?'}").
+       - DETALLE OPERATIVO GRANULAR A OBTENER:
+         1. Hora de llegada MÁS TEMPRANA que puede cumplir en cada uno de los días que declaró disponible (día por día, no en general).
+         2. Si puede cubrir turnos de APERTURA (~5:00–5:30 AM).
+         3. Si puede cubrir turnos de CIERRE.
+         4. Disponibilidad EXACTA de sábado y domingo (especificar: día completo, solo mañanas, o no disponible).
+         5. Disponibilidad en FESTIVOS.
+         6. Cuántas HORAS POR SEMANA quiere realmente trabajar.
+         7. Si tiene empleo actual, cuánto AVISO PREVIO necesitaría antes de empezar el entrenamiento, y cuándo podría comenzar.
+     * Qué escuchar (listenFor del bloque): Respuestas concretas y sin ambigüedad, coherencia con lo declarado online, disposición real para aperturas/cierres/fines de semana, certeza sobre transporte propio confiable.
+     * Alertas (redFlags del bloque): Cambios respecto a lo declarado previamente, vaguedad sobre horas de apertura/cierre, imposibilidad para los turnos que el modelo necesita, falta de disponibilidad en fines de semana o festivos.
 ${(position || "Barista") === "Barista" ? `   - BLOQUE OBLIGATORIO PARA BARISTA:
      Debes incluir OBLIGATORIAMENTE un bloque titulado "${lang === 'en' ? 'Coffee Knowledge and Drink Recipes' : 'Conocimiento técnico de café y recetas'}" con mustPass: false (FORMATIVO / NO ELIMINATORIO).
      * Objetivo del bloque: Calibrar el nivel técnico real del candidato en preparación de bebidas estándar de café y verificar en vivo lo que declaró online (NUNCA para descartarlo).
@@ -2215,106 +2230,74 @@ app.post("/api/admin/sessions/:id/live-interview/probe-questions", liveInterview
   const transcript = session.liveInterview?.transcript || "";
 
   try {
-    const prompt = `You are an AI assistant for a human interviewer.
-We need 2-4 specific follow-up questions to probe the candidate about the following interview block.
+    const prompt = `You are a Senior Hiring & HR Director at Ellianos Coffee.
+Generate 2 to 3 sharp, concrete follow-up probe questions in ${langName} for the interviewer to ask during this live interview for block "${block.title}" (Goal: ${block.goal}).
+Current block status: ${blockStatus.status || 'not_covered'} (Rating: ${blockStatus.liveRating || 'N/A'}, gaps: ${blockStatus.gaps || 'none'}).
+Live interview transcript so far:
+${transcript || "No transcript yet."}
 
-IMPORTANT RULES:
-1. OUTPUT LANGUAGE — CRITICAL: Write the "rationale" field and ANY analysis text in ${langName} ONLY, no matter what language the candidate or interviewer speaks. Even if the entire conversation was in Spanish, the "rationale" MUST be in ${langName}.
-2. QUESTIONS: Provide each question in BOTH Spanish (es) and English (en).
-
-Interview Block:
-- Title: ${block.title}
-- Goal: ${block.goal}
-- Listen For: ${JSON.stringify(block.listenFor || [])}
-- Red Flags: ${JSON.stringify(block.redFlags || [])}
-
-Current Block Status:
-- Status: ${blockStatus.status || "not_addressed"}
-- Gaps (What is missing/failing): ${JSON.stringify(blockStatus.gaps || "Unknown")}
-- Reasoning: ${blockStatus.reasoning || "Unknown"}
-
-Full Transcript so far:
-${transcript}
-
-Task:
-Based on what the candidate has already said and the identified "gaps", generate 2-4 specific follow-up questions to investigate exactly what is missing and complete the evaluation of this block. Do not repeat what has already been answered. Do not penalize for non-native language.
-Return the questions in BOTH Spanish (es) and English (en), along with a rationale in ${langName} for why this question helps.
-
-Return a strict JSON object:
-{
-  "questions": [
-    {
-      "es": "Question in Spanish",
-      "en": "Question in English",
-      "rationale": "Why this question helps bridge the gap (in ${langName})"
-    }
-  ]
-}`;
+Requirements:
+- The questions must be direct, operational, and non-confrontational.
+- Written strictly in ${langName}.
+- Return JSON: { "questions": ["Question 1", "Question 2", "Question 3"] }`;
 
     const response = await generateContentWithInfiniteResilience({
       contents: prompt,
       config: {
         responseMimeType: "application/json",
-      }
+        temperature: 0.3,
+      },
     });
 
     const rawText = response?.text || "";
-    if (!rawText) throw new Error("Empty response from Gemini");
-
-    const aiResult = JSON.parse(rawText);
-    return res.json({ success: true, questions: aiResult.questions || [] });
-  } catch (error: any) {
-    console.error("Probe questions error", error);
-    return res.status(500).json({ error: "Failed to generate probe questions" });
+    const cleaned = rawText.replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/i, "").trim();
+    const result = JSON.parse(cleaned);
+    return res.json({ success: true, questions: Array.isArray(result.questions) ? result.questions : [] });
+  } catch (err: any) {
+    console.error("Error generating probe questions:", err);
+    return res.status(500).json({ success: false, error: err.message });
   }
 });
 
-// Comprehensive AI Final Evaluation Endpoint
-app.post("/api/admin/sessions/:id/live-interview/final-evaluation", liveInterviewFinalEvalLimiter, async (req, res) => {
+// --- LIVE INTERVIEW FINAL EVALUATION ---
+app.post("/api/admin/sessions/:id/live-interview/final-evaluation", async (req, res) => {
   const authHeader = req.headers["x-admin-passcode"] as string | undefined;
   if (!verifyAdminAccess(authHeader, res)) return;
 
   const { id } = req.params;
-  const { uiLanguage } = req.body || {};
+  const { uiLanguage } = req.body;
   const langName = uiLanguage === 'en' ? 'English' : 'Spanish';
 
-  // Read session by direct document lookup with local fallback
   let session: any = null;
   if (firestoreClient) {
-    try {
-      const docSnap = await firestoreClient.collection("interviews").doc(id).get();
-      if (docSnap.exists) {
-        session = docSnap.data();
-      }
-    } catch (fsErr) {
-      handleFirestoreError('Final Evaluation Firestore error', fsErr);
+    const docSnap = await firestoreClient.collection("interviews").doc(id).get();
+    if (docSnap.exists) {
+      session = docSnap.data();
     }
   }
   if (!session) {
     const sessions = getLocalSessions();
     session = sessions.find((s: any) => s.id === id);
   }
-  if (!session) {
-    return res.status(404).json({ success: false, error: uiLanguage === 'en' ? "Session not found" : "Sesión no encontrada" });
-  }
-
-  const transcript = session.liveInterview?.transcript?.trim();
-  if (!transcript) {
-    return res.status(400).json({
-      success: false,
-      error: uiLanguage === 'en'
-        ? "No interview transcript recorded yet. Please conduct or record the interview conversation before generating a final evaluation."
-        : "Aún no hay transcripción de entrevista registrada. Primero debe haber conversación registrada antes de generar la evaluación final."
-    });
-  }
+  if (!session) return res.status(404).json({ error: "Session not found" });
 
   const guide = session.secondInterviewGuide;
   if (!guide) {
     return res.status(400).json({
       success: false,
       error: uiLanguage === 'en'
-        ? "No second interview guide found for this session."
-        : "No se encontró la guía de segunda entrevista para esta sesión."
+        ? "Interview guide not found. Please generate the guide first."
+        : "No se encontró la guía de entrevista. Por favor genera la guía primero."
+    });
+  }
+
+  const transcript = session.liveInterview?.transcript || "";
+  if (!transcript.trim()) {
+    return res.status(400).json({
+      success: false,
+      error: uiLanguage === 'en'
+        ? "No interview transcript found. A conversation must be recorded before evaluating."
+        : "No se encontró transcripción de la entrevista. Se requiere haber grabado conversación para evaluar."
     });
   }
 
@@ -2359,7 +2342,7 @@ ${transcript}
 
 CRITICAL RULES & GUIDELINES:
 1. OUTPUT LANGUAGE — ABSOLUTE MANDATE:
-   Write EVERY SINGLE text field (strengths, concerns, narrative, blockSummary notes and titles, evidence, inconsistencies) in ${langName} ONLY.
+   Write EVERY SINGLE text field (strengths, concerns, narrative, blockSummary notes and titles, evidence, inconsistencies, confirmedAvailability notes) in ${langName} ONLY.
    Even if parts of the transcript or the entire interview were spoken in the other language, your evaluation analysis MUST be written in ${langName}.
 2. HUMAN ASSISTANCE NOTICE:
    This evaluation is an ASSISTANCE tool for human hiring decision-makers. It is NOT an automatic binding verdict.
@@ -2391,6 +2374,17 @@ CRITICAL RULES & GUIDELINES:
      * evidence: Detailed explanation in ${langName} citing concrete statements from the live interview compared to the online claims.
    - "inconsistenciesWithOnlineInterview":
      * An array of strings in ${langName} listing any specific discrepancies or contradictions between what was declared in the first online interview and what happened in the live interview (e.g. claimed 2 years on commercial espresso but could not describe steaming milk or shot timing; claimed open availability online but cited restricted hours in person). If there are NO discrepancies, return an empty array [].
+9. CONFIRMED GRANULAR AVAILABILITY (CRITICAL OPERATIONAL FIT):
+   Synthesize the candidate's confirmed operational availability verified during the live interview:
+   - "confirmedAvailability":
+     * openingShifts: "YES" | "NO" | "CONDITIONAL" (can they reliably cover early morning ~5:00–5:30 AM opening shifts?)
+     * closingShifts: "YES" | "NO" | "CONDITIONAL" (can they reliably cover store closing shifts?)
+     * weekends: Text in ${langName} detailing their confirmed weekend availability (e.g. "Sábados y Domingos completos", "Solo mañanas", "No disponible fines de semana")
+     * holidays: "YES" | "NO" | "CONDITIONAL" (available on high-volume holiday shifts?)
+     * hoursPerWeek: Text in ${langName} with their target weekly hours (e.g. "30-35 horas/semana")
+     * earliestArrival: Text in ${langName} with earliest arrival time across days (e.g. "5:00 AM de lunes a viernes, 6:00 AM fines de semana")
+     * noticePeriodAndStartDate: Text in ${langName} with required notice period and earliest start date (e.g. "Disponible de inmediato / Sin preaviso" or "2 semanas de preaviso")
+     * notes: Summary notes in ${langName} highlighting any specific schedule constraints, transportation reliability, or changes compared to what they claimed in their online interview.
 
 Return a strict JSON object with this exact structure:
 {
@@ -2424,7 +2418,17 @@ Return a strict JSON object with this exact structure:
   },
   "inconsistenciesWithOnlineInterview": [
     "Discrepancy 1 in ${langName}"
-  ]
+  ],
+  "confirmedAvailability": {
+    "openingShifts": "YES" | "NO" | "CONDITIONAL",
+    "closingShifts": "YES" | "NO" | "CONDITIONAL",
+    "weekends": "Exact weekend availability in ${langName}",
+    "holidays": "YES" | "NO" | "CONDITIONAL",
+    "hoursPerWeek": "Desired weekly hours in ${langName}",
+    "earliestArrival": "Earliest arrival time in ${langName}",
+    "noticePeriodAndStartDate": "Notice period and start date in ${langName}",
+    "notes": "Granular operational availability observations in ${langName}"
+  }
 }`;
 
     const response = await generateContentWithInfiniteResilience({
@@ -2470,6 +2474,24 @@ Return a strict JSON object with this exact structure:
       ? aiResult.inconsistenciesWithOnlineInterview.map(String).filter((s: string) => s.trim().length > 0)
       : [];
 
+    let confirmedAvailability: any = undefined;
+    if (aiResult.confirmedAvailability && typeof aiResult.confirmedAvailability === 'object') {
+      const normStatus = (val: any) => {
+        const s = String(val || '').toUpperCase().trim();
+        return ['YES', 'NO', 'CONDITIONAL'].includes(s) ? s : 'CONDITIONAL';
+      };
+      confirmedAvailability = {
+        openingShifts: normStatus(aiResult.confirmedAvailability.openingShifts),
+        closingShifts: normStatus(aiResult.confirmedAvailability.closingShifts),
+        weekends: String(aiResult.confirmedAvailability.weekends || '').trim(),
+        holidays: normStatus(aiResult.confirmedAvailability.holidays),
+        hoursPerWeek: String(aiResult.confirmedAvailability.hoursPerWeek || '').trim(),
+        earliestArrival: String(aiResult.confirmedAvailability.earliestArrival || '').trim(),
+        noticePeriodAndStartDate: String(aiResult.confirmedAvailability.noticePeriodAndStartDate || '').trim(),
+        notes: String(aiResult.confirmedAvailability.notes || '').trim()
+      };
+    }
+
     // Sanitize and validate final evaluation payload
     const finalEvaluation = {
       overallRating: Math.max(1, Math.min(5, Math.round(Number(aiResult.overallRating) || 3))),
@@ -2497,6 +2519,7 @@ Return a strict JSON object with this exact structure:
       bestFitPosition,
       claimedExperienceVerification,
       inconsistenciesWithOnlineInterview,
+      confirmedAvailability,
       generatedAt: new Date().toISOString(),
       language: uiLanguage || 'es'
     };

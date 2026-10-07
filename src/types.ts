@@ -121,6 +121,17 @@ export interface BestFitPosition {
   reasoning: string;
 }
 
+export interface LiveInterviewConfirmedAvailability {
+  openingShifts: 'YES' | 'NO' | 'CONDITIONAL';
+  closingShifts: 'YES' | 'NO' | 'CONDITIONAL';
+  weekends: string;
+  holidays: 'YES' | 'NO' | 'CONDITIONAL';
+  hoursPerWeek: string;
+  earliestArrival?: string;
+  noticePeriodAndStartDate?: string;
+  notes: string;
+}
+
 export interface LiveInterviewFinalEvaluation {
   overallRating: number; // 1 to 5
   recommendation: 'Hire' | 'Second Interview' | 'Do Not Hire';
@@ -137,6 +148,7 @@ export interface LiveInterviewFinalEvaluation {
     evidence: string;
   };
   inconsistenciesWithOnlineInterview?: string[];
+  confirmedAvailability?: LiveInterviewConfirmedAvailability;
 }
 
 export interface LiveInterviewState {
