@@ -26,6 +26,22 @@ function formatFinalEvaluationAsText(evalData: LiveInterviewFinalEvaluation, can
     text += `  ${t.liveBestFitReasoning}: ${evalData.bestFitPosition.reasoning}\n\n`;
   }
 
+  if (evalData.claimedExperienceVerification) {
+    const statusLabel = evalData.claimedExperienceVerification.status === 'VERIFIED'
+      ? t.liveClaimedExpVerifiedBadge
+      : evalData.claimedExperienceVerification.status === 'PARTIALLY_VERIFIED'
+        ? t.liveClaimedExpPartiallyBadge
+        : t.liveClaimedExpNotVerifiedBadge;
+    text += `* ${t.liveClaimedExpTitle.toUpperCase()}: [${statusLabel}]\n`;
+    text += `  ${evalData.claimedExperienceVerification.evidence}\n\n`;
+  }
+
+  if (evalData.inconsistenciesWithOnlineInterview && evalData.inconsistenciesWithOnlineInterview.length > 0) {
+    text += `--- ${t.liveInconsistenciesTitle.toUpperCase()} ---\n`;
+    evalData.inconsistenciesWithOnlineInterview.forEach((inc) => { text += `⚠️ ${inc}\n`; });
+    text += `\n`;
+  }
+
   text += `--- ${t.liveFinalEvalNarrative.toUpperCase()} ---\n`;
   text += `${evalData.narrative}\n\n`;
 
@@ -180,6 +196,24 @@ function generatePrintableFinalEvaluationHtml(
   <div class="best-fit-box">
     <strong style="color:#5b21b6;">${escapeHtml(t.liveBestFitTitle)}: ${escapeHtml(evalData.bestFitPosition.position)}</strong>
     <div style="font-size:12px;color:#4c1d95;margin-top:4px;">${escapeHtml(evalData.bestFitPosition.reasoning)}</div>
+  </div>` : ''}
+
+  ${evalData.claimedExperienceVerification ? `
+  <div style="background:#eff6ff;border:1px solid #bfdbfe;padding:12px 16px;border-radius:10px;margin-bottom:16px;">
+    <strong style="color:#1e40af;">${escapeHtml(t.liveClaimedExpTitle)}: 
+      <span style="font-size:11px;padding:2px 8px;border-radius:4px;background:${evalData.claimedExperienceVerification.status === 'VERIFIED' ? '#dcfce7;color:#166534' : evalData.claimedExperienceVerification.status === 'PARTIALLY_VERIFIED' ? '#fef9c3;color:#854d0e' : '#ffe4e6;color:#9f1239'}">
+        ${escapeHtml(evalData.claimedExperienceVerification.status === 'VERIFIED' ? t.liveClaimedExpVerifiedBadge : evalData.claimedExperienceVerification.status === 'PARTIALLY_VERIFIED' ? t.liveClaimedExpPartiallyBadge : t.liveClaimedExpNotVerifiedBadge)}
+      </span>
+    </strong>
+    <div style="font-size:12px;color:#1e3a8a;margin-top:6px;line-height:1.5;">${escapeHtml(evalData.claimedExperienceVerification.evidence)}</div>
+  </div>` : ''}
+
+  ${evalData.inconsistenciesWithOnlineInterview && evalData.inconsistenciesWithOnlineInterview.length > 0 ? `
+  <div style="background:#fffbeb;border:1px solid #fde68a;padding:12px 16px;border-radius:10px;margin-bottom:16px;">
+    <strong style="color:#92400e;display:block;margin-bottom:6px;">⚠️ ${escapeHtml(t.liveInconsistenciesTitle)}:</strong>
+    <ul style="margin:0 0 0 16px;padding:0;color:#78350f;font-size:12px;">
+      ${evalData.inconsistenciesWithOnlineInterview.map(inc => `<li>${escapeHtml(inc)}</li>`).join('')}
+    </ul>
   </div>` : ''}
 
   <h2>${escapeHtml(t.liveFinalEvalNarrative)}</h2>
@@ -1493,6 +1527,72 @@ export function LiveInterviewPanel({
                 <strong className="text-purple-900 block mb-1">{t.liveBestFitReasoning}:</strong>
                 {liveState.finalEvaluation.bestFitPosition.reasoning}
               </div>
+            </div>
+          )}
+
+          {/* Claimed Experience Verification Card */}
+          {liveState.finalEvaluation.claimedExperienceVerification && (
+            <div className={`mb-6 p-5 rounded-2xl border shadow-xs ${
+              liveState.finalEvaluation.claimedExperienceVerification.status === 'VERIFIED'
+                ? 'bg-emerald-50/60 border-emerald-200'
+                : liveState.finalEvaluation.claimedExperienceVerification.status === 'PARTIALLY_VERIFIED'
+                  ? 'bg-amber-50/60 border-amber-200'
+                  : 'bg-rose-50/60 border-rose-200'
+            }`}>
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 mb-3">
+                <h5 className="text-xs font-bold uppercase tracking-wider flex items-center gap-2 text-slate-800">
+                  <CheckCircle2 className={`w-4 h-4 ${
+                    liveState.finalEvaluation.claimedExperienceVerification.status === 'VERIFIED'
+                      ? 'text-emerald-600'
+                      : liveState.finalEvaluation.claimedExperienceVerification.status === 'PARTIALLY_VERIFIED'
+                        ? 'text-amber-600'
+                        : 'text-rose-600'
+                  }`} />
+                  <span>{t.liveClaimedExpTitle}</span>
+                </h5>
+                <span className={`text-[11px] font-bold uppercase tracking-wider px-2.5 py-1 rounded-lg self-start sm:self-auto ${
+                  liveState.finalEvaluation.claimedExperienceVerification.status === 'VERIFIED'
+                    ? 'bg-emerald-100 text-emerald-800 border border-emerald-300'
+                    : liveState.finalEvaluation.claimedExperienceVerification.status === 'PARTIALLY_VERIFIED'
+                      ? 'bg-amber-100 text-amber-800 border border-amber-300'
+                      : 'bg-rose-100 text-rose-800 border border-rose-300'
+                }`}>
+                  {liveState.finalEvaluation.claimedExperienceVerification.status === 'VERIFIED'
+                    ? t.liveClaimedExpVerifiedBadge
+                    : liveState.finalEvaluation.claimedExperienceVerification.status === 'PARTIALLY_VERIFIED'
+                      ? t.liveClaimedExpPartiallyBadge
+                      : t.liveClaimedExpNotVerifiedBadge}
+                </span>
+              </div>
+              <div className="text-xs leading-relaxed text-slate-800 bg-white/80 p-3.5 rounded-xl border border-slate-200/80">
+                <strong className="block text-slate-900 mb-1">{t.liveClaimedExpEvidenceLabel}</strong>
+                <p className="whitespace-pre-line font-medium text-slate-700">{liveState.finalEvaluation.claimedExperienceVerification.evidence}</p>
+              </div>
+            </div>
+          )}
+
+          {/* Inconsistencies with Online Interview */}
+          {liveState.finalEvaluation.inconsistenciesWithOnlineInterview && (
+            <div className="mb-6 p-5 rounded-2xl bg-amber-50/40 border border-amber-200/80 shadow-xs">
+              <h5 className="text-xs font-bold uppercase tracking-wider text-amber-900 flex items-center gap-2 mb-3">
+                <AlertTriangle className="w-4 h-4 text-amber-600" />
+                <span>{t.liveInconsistenciesTitle}</span>
+              </h5>
+              {liveState.finalEvaluation.inconsistenciesWithOnlineInterview.length > 0 ? (
+                <ul className="space-y-2">
+                  {liveState.finalEvaluation.inconsistenciesWithOnlineInterview.map((inc, idx) => (
+                    <li key={idx} className="text-xs text-amber-950 flex items-start gap-2 bg-white/80 p-2.5 rounded-lg border border-amber-200">
+                      <span className="w-1.5 h-1.5 rounded-full bg-amber-600 shrink-0 mt-1.5"></span>
+                      <span className="font-medium leading-relaxed">{inc}</span>
+                    </li>
+                  ))}
+                </ul>
+              ) : (
+                <div className="text-xs text-emerald-800 bg-emerald-50/80 p-3 rounded-lg border border-emerald-200 flex items-center gap-2">
+                  <Check className="w-4 h-4 text-emerald-600 shrink-0" />
+                  <span>{t.liveInconsistenciesNone}</span>
+                </div>
+              )}
             </div>
           )}
 

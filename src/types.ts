@@ -132,6 +132,11 @@ export interface LiveInterviewFinalEvaluation {
   language?: string;
   bestFitPosition?: BestFitPosition;
   targetPosition?: 'Barista' | 'Shift Leader' | 'Store Manager';
+  claimedExperienceVerification?: {
+    status: 'VERIFIED' | 'PARTIALLY_VERIFIED' | 'NOT_VERIFIED';
+    evidence: string;
+  };
+  inconsistenciesWithOnlineInterview?: string[];
 }
 
 export interface LiveInterviewState {
