@@ -677,15 +677,16 @@ REGLAS DE CONTENIDO:
    - BLOQUE OBLIGATORIO: ADAPTACIÓN AL MODELO ELLIANOS Y DISPONIBILIDAD OPERATIVA (mustPass: true):
      Debes incluir OBLIGATORIAMENTE un bloque titulado "${lang === 'en' ? 'Ellianos Model Fit & Availability' : 'Adaptación al Modelo Ellianos y Disponibilidad'}" con mustPass: true (BLOQUE ELIMINATORIO).
      * Contexto operativo: La tienda es un drive-thru de doble carril de 800 sq ft con turnos de apertura temprana de madrugada (~5:00–5:30 AM), turnos de cierre, fines de semana y días festivos, operando con personal mínimo (lean-staffed). La disponibilidad precisa es crítica.
-     * Preguntas operativas obligatorias (3 a 4 preguntas en el bloque):
+     * Preguntas operativas obligatorias (3 a 5 preguntas en el bloque):
        - ANCLAJE EN LO DECLARADO: Formula las preguntas citando lo que el candidato declaró por escrito en la entrevista online (ej: "${lang === 'en' ? 'In your written interview you stated you are available [X]; what is the earliest arrival time you can commit to on each of those days, and could you cover early morning openings (~5:00–5:30 AM)?' : 'Por escrito dijiste que estás disponible [X]; ¿cuál es la hora más temprana que puedes llegar esos días y podrías cubrir aperturas de madrugada (~5:00–5:30 AM)?'}").
+       - PREGUNTA OBLIGATORIA DE HORAS SEMANALES DESEADAS (OBLIGATORIA EN TODAS LAS GUÍAS): Es REQUISITO OBLIGATORIO que el bloque de disponibilidad SIEMPRE incluya una pregunta explícita que confirme cuántas HORAS POR SEMANA quiere trabajar realmente el candidato, anclada en lo que declaró online si lo mencionó (ej: "${lang === 'en' ? 'In your written interview you indicated you are looking for [X] hours; how many hours per week do you concretely want to work, and is there a minimum or maximum you need?' : 'En tu entrevista escrita indicaste que buscas [X] horas; ¿cuántas horas por semana quieres trabajar en concreto, y hay un mínimo o máximo que necesitas?'}"). Esta pregunta debe aparecer en TODAS las guías de disponibilidad, sin importar el tipo de candidato, además de las ya existentes.
        - DETALLE OPERATIVO GRANULAR A OBTENER:
          1. Hora de llegada MÁS TEMPRANA que puede cumplir en cada uno de los días que declaró disponible (día por día, no en general).
          2. Si puede cubrir turnos de APERTURA (~5:00–5:30 AM).
          3. Si puede cubrir turnos de CIERRE.
          4. Disponibilidad EXACTA de sábado y domingo (especificar: día completo, solo mañanas, o no disponible).
          5. Disponibilidad en FESTIVOS.
-         6. Cuántas HORAS POR SEMANA quiere realmente trabajar.
+         6. Cuántas HORAS POR SEMANA quiere realmente trabajar (confirmar horas exactas y si requiere un mínimo o máximo).
          7. Si tiene empleo actual, cuánto AVISO PREVIO necesitaría antes de empezar el entrenamiento, y cuándo podría comenzar.
      * Qué escuchar (listenFor del bloque): Respuestas concretas y sin ambigüedad, coherencia con lo declarado online, disposición real para aperturas/cierres/fines de semana, certeza sobre transporte propio confiable.
      * Alertas (redFlags del bloque): Cambios respecto a lo declarado previamente, vaguedad sobre horas de apertura/cierre, imposibilidad para los turnos que el modelo necesita, falta de disponibilidad en fines de semana o festivos.
@@ -754,6 +755,79 @@ ${(position || "Barista") === "Barista" ? `   - BLOQUE OBLIGATORIO PARA BARISTA:
         }
         for (const qId of b.questionIds) {
           if (!qMap.has(qId)) throw new Error(`Block ${b.id} references missing question ${qId}`);
+        }
+      }
+
+      // Ensure the availability block explicitly includes the mandatory weekly hours question in all generated guides
+      const availBlock = parsed.blocks.find((b: any) => {
+        const title = (b.title || "").toLowerCase();
+        return (
+          title.includes("disponib") ||
+          title.includes("availab") ||
+          title.includes("modelo ellianos") ||
+          title.includes("model fit")
+        );
+      });
+
+      if (availBlock) {
+        const hasWeeklyHoursQ = availBlock.questionIds.some((qId: string) => {
+          const q = qMap.get(qId);
+          if (!q) return false;
+          const txt = (q.text || "").toLowerCase();
+          const purpose = (q.purpose || "").toLowerCase();
+          return (
+            (txt.includes("hora") && (txt.includes("semana") || txt.includes("sem"))) ||
+            (txt.includes("hour") && (txt.includes("week") || txt.includes("target"))) ||
+            txt.includes("horas por semana") ||
+            txt.includes("hours per week") ||
+            purpose.includes("horas por semana") ||
+            purpose.includes("hours per week")
+          );
+        });
+
+        if (!hasWeeklyHoursQ) {
+          // Look for declared hours in candidate messages
+          let declaredHoursMention = "";
+          for (const m of (messages || [])) {
+            const role = (m.role || "").toUpperCase();
+            if (role === "USER" || role === "CANDIDATE") {
+              const text = m.parts?.[0]?.text || "";
+              const match = text.match(/(\b\d{1,2}\s*(?:[-–a]\s*\d{1,2})?\s*(?:horas|hours|hrs)\b)/i);
+              if (match) {
+                declaredHoursMention = match[1];
+                break;
+              }
+            }
+          }
+
+          const qId = `q_avail_hours_${Date.now()}`;
+          const qText = lang === "en"
+            ? (declaredHoursMention
+                ? `In your written interview you indicated you are looking for ${declaredHoursMention}; how many hours per week do you concretely want to work, and is there a minimum or maximum you need?`
+                : "Regarding your operational availability, how many hours per week do you concretely want to work, and is there a minimum or maximum you need?")
+            : (declaredHoursMention
+                ? `En tu entrevista escrita indicaste que buscas ${declaredHoursMention}; ¿cuántas horas por semana quieres trabajar en concreto, y hay un mínimo o máximo que necesitas?`
+                : "En tu entrevista escrita indicaste tu disponibilidad; ¿cuántas horas por semana quieres trabajar en concreto, y hay un mínimo o máximo que necesitas?");
+
+          const newQ = {
+            id: qId,
+            block: availBlock.id,
+            text: qText,
+            language: lang === "en" ? "en" : "es",
+            purpose: lang === "en"
+              ? "Confirm target and minimum/maximum weekly hours commitment."
+              : "Confirmar compromiso de horas semanales deseadas y margen mínimo o máximo requerido.",
+            listenFor: lang === "en"
+              ? ["Clear, realistic target for weekly hours", "Flexibility within kiosk shift schedules", "Alignment with store needs"]
+              : ["Número claro y realista de horas deseadas", "Disponibilidad coherente con los turnos de la tienda", "Flexibilidad operativa"],
+            redFlags: lang === "en"
+              ? ["Vagueness or major deviation from initial application", "Inflexible hour demands incompatible with lean staffing", "Unrealistic availability"]
+              : ["Vaguedad o cambio radical frente a lo declarado online", "Horarios rígidos incompatibles con equipo reducido", "Inconsistencia con la necesidad de la tienda"]
+          };
+
+          parsed.questions.push(newQ);
+          qMap.set(qId, newQ);
+          availBlock.questionIds.push(qId);
         }
       }
 
