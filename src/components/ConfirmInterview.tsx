@@ -18,6 +18,8 @@ interface AppointmentData {
   status: 'pending' | 'confirmed' | 'reschedule_requested' | 'cancelled';
   language?: 'en' | 'es';
   notes?: string;
+  interviewLocationName?: string;
+  interviewLocationAddress?: string;
   availableSlots: AvailableSlot[];
 }
 
@@ -26,11 +28,11 @@ const t = {
     pageTitle: "Your In-Person 2nd Interview",
     brandSubtitle: "Ellianos Coffee • Italian Quality at America's Pace®",
     greeting: (name: string) => `Hello ${name}!`,
-    introPending: "You have been invited for an in-person second interview at our drive-thru location. Please review the details below and confirm your attendance.",
+    introPending: "You have been invited for an in-person second interview at our office. Please review the details below and confirm your attendance.",
     introConfirmed: "Your interview attendance is confirmed! Below are your details and instructions for arrival.",
     locationTitle: "Interview Location",
-    locationDesc: "Ellianos Coffee Kiosk (Double-Sided Drive-Thru)",
-    locationCity: "Lehigh Acres, Florida",
+    locationDesc: "10-4 Truck Parts (Company Office)",
+    locationCity: "5570 Lee St, Ste 8, Lehigh Acres, FL 33971",
     dateTimeTitle: "Scheduled Date & Time",
     easternNotice: "All times shown in Florida local time (Eastern Time - ET)",
     statusPending: "Confirmation Needed",
@@ -42,8 +44,8 @@ const t = {
     confirmedSuccessBody: "Thank you for confirming. We are excited to meet you in person!",
     arrivalTipsTitle: "Important Arrival Instructions",
     tip1: "Please arrive 5 to 10 minutes prior to your scheduled time.",
-    tip2: "Dress in neat, comfortable casual attire (closed-toe shoes recommended for safety inside the kiosk).",
-    tip3: "When you arrive, greet the barista at the window and let them know: 'I am here for my interview with the manager.'",
+    tip2: "Dress in neat, comfortable casual attire.",
+    tip3: "When you arrive, enter the office and let the front desk or team know: 'I am here for my interview with the manager.'",
     tip4: "No need to bring printed paperwork—our team has your virtual application on file.",
     needReschedule: "Need a different day or time?",
     rescheduleBtnText: "Reschedule Interview",
@@ -65,11 +67,11 @@ const t = {
     pageTitle: "Tu 2ª Entrevista Presencial",
     brandSubtitle: "Ellianos Coffee • Calidad Italiana al Ritmo Americano®",
     greeting: (name: string) => `¡Hola ${name}!`,
-    introPending: "Has sido invitado/a a tu segunda entrevista presencial en nuestro kiosco drive-thru. Revisa los detalles a continuación y confirma tu asistencia.",
+    introPending: "Has sido invitado/a a tu segunda entrevista presencial en nuestra oficina. Revisa los detalles a continuación y confirma tu asistencia.",
     introConfirmed: "¡Tu asistencia a la entrevista está confirmada! A continuación encontrarás los detalles e instrucciones de llegada.",
     locationTitle: "Ubicación de la Entrevista",
-    locationDesc: "Kiosco Ellianos Coffee (Doble Carril Drive-Thru)",
-    locationCity: "Lehigh Acres, Florida",
+    locationDesc: "10-4 Truck Parts (Oficina de la Empresa)",
+    locationCity: "5570 Lee St, Ste 8, Lehigh Acres, FL 33971",
     dateTimeTitle: "Fecha y Hora Programada",
     easternNotice: "Horarios en hora local de Florida (Hora del Este - ET)",
     statusPending: "Confirmación Pendiente",
@@ -81,8 +83,8 @@ const t = {
     confirmedSuccessBody: "Gracias por confirmar. ¡Nos dará mucho gusto conocerte en persona!",
     arrivalTipsTitle: "Instrucciones Importantes de Llegada",
     tip1: "Por favor llega entre 5 y 10 minutos antes de tu hora programada.",
-    tip2: "Viste ropa casual pulcra y calzado cómodo cerrado (recomendado por seguridad en el kiosco).",
-    tip3: "Al llegar, acércate a la ventanilla y dile al barista: 'Vengo a mi entrevista con el/la gerente.'",
+    tip2: "Viste ropa casual pulcra y calzado cómodo.",
+    tip3: "Al llegar, entra a la oficina y avisa al equipo de recepción: 'Vengo a mi entrevista con el/la gerente.'",
     tip4: "No necesitas llevar papeles impresos—nuestro equipo tiene tu aplicación virtual en sistema.",
     needReschedule: "¿Necesitas otra fecha u hora?",
     rescheduleBtnText: "Reagendar Entrevista",
@@ -360,8 +362,8 @@ export function ConfirmInterview() {
               </div>
               <div className="space-y-1">
                 <p className="text-xs uppercase font-bold tracking-wider text-stone-500">{text.locationTitle}</p>
-                <p className="text-base font-bold text-stone-900">{text.locationDesc}</p>
-                <p className="text-sm text-stone-600">{text.locationCity}</p>
+                <p className="text-base font-bold text-stone-900">{data.interviewLocationName || text.locationDesc}</p>
+                <p className="text-sm text-stone-600">{data.interviewLocationAddress || text.locationCity}</p>
               </div>
             </div>
           </div>

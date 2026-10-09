@@ -916,6 +916,7 @@ app.post("/api/sessions/sync", sessionSyncLimiter, async (req, res) => {
       onboarding: _ignoredOnboarding,
       liveInterview: _ignoredLiveInterview,
       appointment: _ignoredAppointment,
+      settings: _ignoredSettings,
       ...cleanSession
     } = session;
 
@@ -1965,8 +1966,9 @@ export interface InterviewAppointmentRecord {
   candidatePhone: string;
   candidateEmail: string;
   startUtc: string; // ISO
-  endUtc: string;   // ISO (1 hour after startUtc)
+  endUtc: string;   // ISO
   status: 'pending' | 'confirmed' | 'reschedule_requested' | 'cancelled';
+  type?: 'interview' | 'blocked';
   token: string;
   createdAt: string;
   updatedAt: string;
@@ -1975,12 +1977,38 @@ export interface InterviewAppointmentRecord {
   smsSent?: boolean;
 }
 
+export interface AppSettingsRecord {
+  interviewLocationName: string;
+  interviewLocationAddress: string;
+  scheduleDays: number[]; // 0=Sun, 1=Mon, ..., 6=Sat
+  scheduleStartHour: number; // e.g. 9
+  scheduleEndHour: number;   // e.g. 17
+  slotDurationMinutes: number; // e.g. 60
+}
+
+const DEFAULT_SETTINGS: AppSettingsRecord = {
+  interviewLocationName: "10-4 Truck Parts (Company Office)",
+  interviewLocationAddress: "5570 Lee St, Ste 8, Lehigh Acres, FL 33971",
+  scheduleDays: [0, 1, 2, 3, 4, 5, 6],
+  scheduleStartHour: 9,
+  scheduleEndHour: 17,
+  slotDurationMinutes: 60
+};
+
 const APPOINTMENTS_FILE = path.join(DATA_DIR, "appointments.json");
+const SETTINGS_FILE = path.join(DATA_DIR, "settings.json");
 
 function ensureAppointmentsDataFile() {
   ensureLocalDataFile();
   if (!fs.existsSync(APPOINTMENTS_FILE)) {
     fs.writeFileSync(APPOINTMENTS_FILE, JSON.stringify([]), "utf-8");
+  }
+}
+
+function ensureSettingsDataFile() {
+  ensureLocalDataFile();
+  if (!fs.existsSync(SETTINGS_FILE)) {
+    fs.writeFileSync(SETTINGS_FILE, JSON.stringify(DEFAULT_SETTINGS, null, 2), "utf-8");
   }
 }
 
@@ -2002,6 +2030,66 @@ function saveLocalAppointments(appts: InterviewAppointmentRecord[]) {
   } catch (err) {
     console.error("[LocalStorage] Error writing appointments file:", err);
   }
+}
+
+function getLocalSettings(): AppSettingsRecord {
+  ensureSettingsDataFile();
+  try {
+    const raw = fs.readFileSync(SETTINGS_FILE, "utf-8");
+    return { ...DEFAULT_SETTINGS, ...JSON.parse(raw) };
+  } catch (err) {
+    console.error("[LocalStorage] Error reading settings file:", err);
+    return DEFAULT_SETTINGS;
+  }
+}
+
+function saveLocalSettings(settings: AppSettingsRecord) {
+  ensureSettingsDataFile();
+  try {
+    fs.writeFileSync(SETTINGS_FILE, JSON.stringify(settings, null, 2), "utf-8");
+  } catch (err) {
+    console.error("[LocalStorage] Error writing settings file:", err);
+  }
+}
+
+async function getStoredSettings(): Promise<AppSettingsRecord> {
+  if (firestoreClient) {
+    try {
+      const doc = await firestoreClient.collection("appSettings").doc("config").get();
+      if (doc.exists) {
+        return { ...DEFAULT_SETTINGS, ...(doc.data() as AppSettingsRecord) };
+      }
+    } catch (fsErr) {
+      handleFirestoreError('Firestore get settings error', fsErr);
+    }
+  }
+  return getLocalSettings();
+}
+
+async function updateStoredSettings(settingsUpdate: Partial<AppSettingsRecord>): Promise<AppSettingsRecord> {
+  const current = await getStoredSettings();
+  const updated: AppSettingsRecord = {
+    ...current,
+    ...settingsUpdate
+  };
+  if (!Array.isArray(updated.scheduleDays) || updated.scheduleDays.length === 0) {
+    updated.scheduleDays = [0, 1, 2, 3, 4, 5, 6];
+  }
+  updated.scheduleStartHour = Number(updated.scheduleStartHour) || 9;
+  updated.scheduleEndHour = Number(updated.scheduleEndHour) || 17;
+  updated.slotDurationMinutes = Number(updated.slotDurationMinutes) || 60;
+  if (!updated.interviewLocationName) updated.interviewLocationName = DEFAULT_SETTINGS.interviewLocationName;
+  if (!updated.interviewLocationAddress) updated.interviewLocationAddress = DEFAULT_SETTINGS.interviewLocationAddress;
+
+  if (firestoreClient) {
+    try {
+      await firestoreClient.collection("appSettings").doc("config").set(updated, { merge: true });
+    } catch (fsErr) {
+      handleFirestoreError('Firestore update settings error', fsErr);
+    }
+  }
+  saveLocalSettings(updated);
+  return updated;
 }
 
 async function syncLocalAppointmentsToFirestoreIfEmpty() {
@@ -2099,9 +2187,19 @@ async function upsertAppointment(appt: InterviewAppointmentRecord): Promise<void
 // ----------------------------------------------------------------------------
 // Florida (America/New_York) Timezone & Slot Helper Functions
 // ----------------------------------------------------------------------------
-function getFloridaSlotIso(dateStr: string, hour: number): string {
+function getFloridaDayOfWeek(dateStr: string): number {
+  const [y, m, d] = dateStr.split("-").map(Number);
+  const dateObj = new Date(Date.UTC(y, m - 1, d, 12, 0, 0));
+  const dayName = new Intl.DateTimeFormat("en-US", { timeZone: "America/New_York", weekday: "short" }).format(dateObj);
+  const dayMap: Record<string, number> = { Sun: 0, Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6 };
+  return dayMap[dayName] ?? 0;
+}
+
+function getFloridaSlotIso(dateStr: string, totalMinutes: number): string {
+  const hour = Math.floor(totalMinutes / 60);
+  const min = totalMinutes % 60;
   const pad = (n: number) => String(n).padStart(2, "0");
-  const guess = new Date(`${dateStr}T${pad(hour)}:00:00Z`);
+  const guess = new Date(`${dateStr}T${pad(hour)}:${pad(min)}:00Z`);
   const parts = new Intl.DateTimeFormat("en-US", {
     timeZone: "America/New_York",
     year: "numeric", month: "2-digit", day: "2-digit",
@@ -2110,8 +2208,9 @@ function getFloridaSlotIso(dateStr: string, hour: number): string {
   }).formatToParts(guess);
   const p = Object.fromEntries(parts.map((x) => [x.type, x.value]));
   const nyHour = parseInt(p.hour === "24" ? "00" : p.hour, 10);
-  const diffHours = hour - nyHour;
-  return new Date(guess.getTime() + diffHours * 3600000).toISOString();
+  const nyMin = parseInt(p.minute, 10);
+  const diffMinutes = (hour * 60 + min) - (nyHour * 60 + nyMin);
+  return new Date(guess.getTime() + diffMinutes * 60000).toISOString();
 }
 
 function formatFloridaDateTime(isoString: string, lang: 'en' | 'es' = 'en'): string {
@@ -2129,9 +2228,9 @@ function formatFloridaDateTime(isoString: string, lang: 'en' | 'es' = 'en'): str
   return `${formatted} ET`;
 }
 
-function formatFloridaSlotLabel(startIso: string): string {
+function formatFloridaSlotLabel(startIso: string, durationMinutes: number = 60): string {
   const startDate = new Date(startIso);
-  const endDate = new Date(startDate.getTime() + 3600000);
+  const endDate = new Date(startDate.getTime() + durationMinutes * 60000);
   const timeFormat = (d: Date) => new Intl.DateTimeFormat("en-US", {
     timeZone: "America/New_York",
     hour: "numeric",
@@ -2141,40 +2240,69 @@ function formatFloridaSlotLabel(startIso: string): string {
   return `${timeFormat(startDate)} - ${timeFormat(endDate)} ET`;
 }
 
-function isValidFloridaSlot(isoString: string): boolean {
+function isValidFloridaSlot(isoString: string, settings: AppSettingsRecord): boolean {
   const d = new Date(isoString);
   if (isNaN(d.getTime())) return false;
   const parts = new Intl.DateTimeFormat("en-US", {
     timeZone: "America/New_York",
     year: "numeric", month: "2-digit", day: "2-digit",
     hour: "2-digit", minute: "2-digit", second: "2-digit",
+    weekday: "short",
     hour12: false
   }).formatToParts(d);
   const p = Object.fromEntries(parts.map((x) => [x.type, x.value]));
+  const dayMap: Record<string, number> = { Sun: 0, Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6 };
+  const dayOfWeek = dayMap[p.weekday] ?? 0;
+  if (!settings.scheduleDays.includes(dayOfWeek)) return false;
+
   const hour = parseInt(p.hour === "24" ? "00" : p.hour, 10);
   const min = parseInt(p.minute, 10);
   const sec = parseInt(p.second, 10);
-  return min === 0 && sec === 0 && hour >= 9 && hour <= 16;
+  if (sec !== 0) return false;
+
+  const totalMinutes = hour * 60 + min;
+  const startMinutes = settings.scheduleStartHour * 60;
+  const endMinutes = settings.scheduleEndHour * 60;
+  const duration = settings.slotDurationMinutes || 60;
+
+  if (totalMinutes < startMinutes || totalMinutes + duration > endMinutes) return false;
+  if ((totalMinutes - startMinutes) % duration !== 0) return false;
+  return true;
 }
 
-function getDailyFloridaSlots(dateStr: string, allAppointments: InterviewAppointmentRecord[], excludeAppointmentId?: string) {
-  const hours = [9, 10, 11, 12, 13, 14, 15, 16];
-  return hours.map((h) => {
-    const startUtc = getFloridaSlotIso(dateStr, h);
-    const endUtc = new Date(new Date(startUtc).getTime() + 3600000).toISOString();
-    const label = formatFloridaSlotLabel(startUtc);
+function getDailyFloridaSlots(
+  dateStr: string,
+  allAppointments: InterviewAppointmentRecord[],
+  excludeAppointmentId?: string,
+  settings: AppSettingsRecord = DEFAULT_SETTINGS
+) {
+  const dayOfWeek = getFloridaDayOfWeek(dateStr);
+  if (!settings.scheduleDays.includes(dayOfWeek)) {
+    return [];
+  }
+
+  const duration = settings.slotDurationMinutes || 60;
+  const startMin = settings.scheduleStartHour * 60;
+  const endMin = settings.scheduleEndHour * 60;
+
+  const slots = [];
+  for (let m = startMin; m + duration <= endMin; m += duration) {
+    const startUtc = getFloridaSlotIso(dateStr, m);
+    const endUtc = new Date(new Date(startUtc).getTime() + duration * 60000).toISOString();
+    const label = formatFloridaSlotLabel(startUtc, duration);
     const taken = allAppointments.some((a) => 
       a.status !== 'cancelled' &&
       a.startUtc === startUtc &&
       (!excludeAppointmentId || a.id !== excludeAppointmentId)
     );
-    return {
+    slots.push({
       startUtc,
       endUtc,
       label,
       taken
-    };
-  });
+    });
+  }
+  return slots;
 }
 
 function getFloridaTodayDateString(): string {
@@ -2313,8 +2441,148 @@ async function sendInterviewSms(toPhone: string, text: string): Promise<boolean>
 }
 
 // ----------------------------------------------------------------------------
-// Admin Appointment Endpoints
+// Admin Settings Endpoints
 // ----------------------------------------------------------------------------
+
+app.get("/api/admin/settings", appointmentAdminLimiter, async (req, res) => {
+  const authHeader = req.headers["x-admin-passcode"] as string | undefined;
+  if (!verifyAdminAccess(authHeader, res)) return;
+
+  try {
+    const settings = await getStoredSettings();
+    res.json({ settings });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message || "Failed to load settings" });
+  }
+});
+
+app.put("/api/admin/settings", appointmentAdminLimiter, async (req, res) => {
+  const authHeader = req.headers["x-admin-passcode"] as string | undefined;
+  if (!verifyAdminAccess(authHeader, res)) return;
+
+  try {
+    const {
+      interviewLocationName,
+      interviewLocationAddress,
+      scheduleDays,
+      scheduleStartHour,
+      scheduleEndHour,
+      slotDurationMinutes
+    } = req.body || {};
+
+    const updated = await updateStoredSettings({
+      interviewLocationName: typeof interviewLocationName === "string" ? interviewLocationName.trim() : undefined,
+      interviewLocationAddress: typeof interviewLocationAddress === "string" ? interviewLocationAddress.trim() : undefined,
+      scheduleDays: Array.isArray(scheduleDays) ? scheduleDays.map(Number) : undefined,
+      scheduleStartHour: scheduleStartHour !== undefined ? Number(scheduleStartHour) : undefined,
+      scheduleEndHour: scheduleEndHour !== undefined ? Number(scheduleEndHour) : undefined,
+      slotDurationMinutes: slotDurationMinutes !== undefined ? Number(slotDurationMinutes) : undefined
+    });
+
+    res.json({ success: true, settings: updated });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message || "Failed to update settings" });
+  }
+});
+
+// ----------------------------------------------------------------------------
+// Admin Appointment & Calendar Endpoints
+// ----------------------------------------------------------------------------
+
+app.get("/api/admin/appointments", appointmentAdminLimiter, async (req, res) => {
+  const authHeader = req.headers["x-admin-passcode"] as string | undefined;
+  if (!verifyAdminAccess(authHeader, res)) return;
+
+  try {
+    const { status, from, to, type } = req.query;
+    let list = await getStoredAppointments();
+
+    if (status && typeof status === "string") {
+      list = list.filter((a) => a.status === status);
+    }
+    if (type && typeof type === "string") {
+      list = list.filter((a) => (a.type || 'interview') === type);
+    }
+    if (from && typeof from === "string") {
+      list = list.filter((a) => a.startUtc >= from);
+    }
+    if (to && typeof to === "string") {
+      list = list.filter((a) => a.startUtc <= to);
+    }
+
+    list.sort((a, b) => new Date(a.startUtc).getTime() - new Date(b.startUtc).getTime());
+
+    const enriched = list.map((a) => ({
+      ...a,
+      label: formatFloridaDateTime(a.startUtc, a.createdByLang || 'en')
+    }));
+
+    res.json({ appointments: enriched });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message || "Failed to list appointments" });
+  }
+});
+
+app.post("/api/admin/appointments/block", appointmentAdminLimiter, async (req, res) => {
+  const authHeader = req.headers["x-admin-passcode"] as string | undefined;
+  if (!verifyAdminAccess(authHeader, res)) return;
+
+  const { startUtc, notes } = req.body || {};
+  if (!startUtc || typeof startUtc !== "string") {
+    return res.status(400).json({ error: "Missing startUtc" });
+  }
+
+  const settings = await getStoredSettings();
+  if (!isValidFloridaSlot(startUtc, settings)) {
+    return res.status(400).json({ error: "Selected slot does not match configured schedule rules." });
+  }
+
+  const allAppointments = await getStoredAppointments();
+  const isTaken = allAppointments.some((a) => a.status !== 'cancelled' && a.startUtc === startUtc);
+  if (isTaken) {
+    return res.status(409).json({ error: "This time slot is already occupied or blocked." });
+  }
+
+  const duration = settings.slotDurationMinutes || 60;
+  const endUtc = new Date(new Date(startUtc).getTime() + duration * 60000).toISOString();
+
+  const blockAppt: InterviewAppointmentRecord = {
+    id: crypto.randomUUID(),
+    sessionId: "blocked",
+    candidateName: "Bloqueado / Blocked",
+    candidatePhone: "",
+    candidateEmail: "",
+    startUtc,
+    endUtc,
+    status: "confirmed",
+    type: "blocked",
+    token: crypto.randomBytes(24).toString("hex"),
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+    notes: typeof notes === "string" ? notes.trim() : "Bloqueo administrativo",
+    smsSent: false
+  };
+
+  await upsertAppointment(blockAppt);
+  res.json({ success: true, appointment: blockAppt });
+});
+
+app.post("/api/admin/appointments/:id/unblock", appointmentAdminLimiter, async (req, res) => {
+  const authHeader = req.headers["x-admin-passcode"] as string | undefined;
+  if (!verifyAdminAccess(authHeader, res)) return;
+
+  const { id } = req.params;
+  const appt = await getAppointmentById(id);
+  if (!appt) {
+    return res.status(404).json({ error: "Blocked slot not found" });
+  }
+
+  appt.status = 'cancelled';
+  appt.updatedAt = new Date().toISOString();
+  await upsertAppointment(appt);
+
+  res.json({ success: true });
+});
 
 app.get("/api/admin/appointments/availability", appointmentAdminLimiter, async (req, res) => {
   const authHeader = req.headers["x-admin-passcode"] as string | undefined;
@@ -2327,8 +2595,9 @@ app.get("/api/admin/appointments/availability", appointmentAdminLimiter, async (
 
   try {
     const excludeId = req.query.excludeId ? String(req.query.excludeId) : undefined;
+    const settings = await getStoredSettings();
     const appointments = await getStoredAppointments();
-    const slots = getDailyFloridaSlots(dateStr, appointments, excludeId);
+    const slots = getDailyFloridaSlots(dateStr, appointments, excludeId, settings);
     res.json({ date: dateStr, slots });
   } catch (err: any) {
     console.error("[Appointments] Availability check error:", err);
@@ -2347,8 +2616,9 @@ app.post("/api/admin/sessions/:id/schedule-interview", appointmentAdminLimiter, 
     return res.status(400).json({ error: "Missing or invalid startUtc" });
   }
 
-  if (!isValidFloridaSlot(startUtc)) {
-    return res.status(400).json({ error: "Slot must be on the hour between 9:00 AM and 5:00 PM Florida time (America/New_York)." });
+  const settings = await getStoredSettings();
+  if (!isValidFloridaSlot(startUtc, settings)) {
+    return res.status(400).json({ error: "Selected slot does not match configured interview schedule rules." });
   }
 
   const sessions = await getStoredSessions();
@@ -2373,7 +2643,8 @@ app.post("/api/admin/sessions/:id/schedule-interview", appointmentAdminLimiter, 
   }
 
   const token = crypto.randomBytes(24).toString("hex");
-  const endUtc = new Date(new Date(startUtc).getTime() + 3600000).toISOString();
+  const duration = settings.slotDurationMinutes || 60;
+  const endUtc = new Date(new Date(startUtc).getTime() + duration * 60000).toISOString();
   const effectiveLang: 'en' | 'es' = lang === 'es' ? 'es' : 'en';
 
   const appointment: InterviewAppointmentRecord = {
@@ -2385,6 +2656,7 @@ app.post("/api/admin/sessions/:id/schedule-interview", appointmentAdminLimiter, 
     startUtc,
     endUtc,
     status: 'pending',
+    type: 'interview',
     token,
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString(),
@@ -2402,9 +2674,11 @@ app.post("/api/admin/sessions/:id/schedule-interview", appointmentAdminLimiter, 
   let smsSent = false;
   if (appointment.candidatePhone) {
     const formattedTime = formatFloridaDateTime(appointment.startUtc, effectiveLang);
+    const locName = settings.interviewLocationName;
+    const locAddr = settings.interviewLocationAddress;
     const smsText = effectiveLang === 'es'
-      ? `Hola ${appointment.candidateName}, te invitamos a tu 2ª entrevista presencial en Ellianos Coffee (Lehigh Acres, FL) el ${formattedTime}. Confirma o reagenda aquí: ${confirmLink}`
-      : `Hi ${appointment.candidateName}, you're invited to your 2nd interview in person at Ellianos Coffee (Lehigh Acres, FL) on ${formattedTime}. Confirm or reschedule here: ${confirmLink}`;
+      ? `Hola ${appointment.candidateName}, te invitamos a tu 2ª entrevista presencial para Ellianos Coffee el ${formattedTime} en nuestra oficina: ${locName}, ${locAddr}. Confirma o reagenda aquí: ${confirmLink}`
+      : `Hi ${appointment.candidateName}, you're invited to your in-person 2nd interview for Ellianos Coffee on ${formattedTime} at our office: ${locName}, ${locAddr}. Confirm or reschedule here: ${confirmLink}`;
 
     smsSent = await sendInterviewSms(appointment.candidatePhone, smsText);
   } else {
@@ -2450,8 +2724,9 @@ app.post("/api/admin/appointments/:id/reschedule", appointmentAdminLimiter, asyn
     return res.status(400).json({ error: "Missing startUtc" });
   }
 
-  if (!isValidFloridaSlot(startUtc)) {
-    return res.status(400).json({ error: "Slot must be on the hour between 9:00 AM and 5:00 PM Florida time." });
+  const settings = await getStoredSettings();
+  if (!isValidFloridaSlot(startUtc, settings)) {
+    return res.status(400).json({ error: "Selected slot does not match configured interview schedule rules." });
   }
 
   const appointment = await getAppointmentById(id);
@@ -2466,8 +2741,9 @@ app.post("/api/admin/appointments/:id/reschedule", appointmentAdminLimiter, asyn
     return res.status(409).json({ error: "This time slot is already booked. Please choose another." });
   }
 
+  const duration = settings.slotDurationMinutes || 60;
   appointment.startUtc = startUtc;
-  appointment.endUtc = new Date(new Date(startUtc).getTime() + 3600000).toISOString();
+  appointment.endUtc = new Date(new Date(startUtc).getTime() + duration * 60000).toISOString();
   appointment.status = 'pending';
   appointment.updatedAt = new Date().toISOString();
 
@@ -2480,9 +2756,11 @@ app.post("/api/admin/appointments/:id/reschedule", appointmentAdminLimiter, asyn
 
   if (appointment.candidatePhone) {
     const formattedTime = formatFloridaDateTime(appointment.startUtc, lang);
+    const locName = settings.interviewLocationName;
+    const locAddr = settings.interviewLocationAddress;
     const smsText = lang === 'es'
-      ? `Hola ${appointment.candidateName}, el horario de tu 2ª entrevista en Ellianos Coffee ha sido actualizado para ${formattedTime}. Revisa y confirma aquí: ${confirmLink}`
-      : `Hi ${appointment.candidateName}, your 2nd interview at Ellianos Coffee has been updated to ${formattedTime}. Review and confirm here: ${confirmLink}`;
+      ? `Hola ${appointment.candidateName}, el horario de tu 2ª entrevista para Ellianos Coffee ha sido actualizado para ${formattedTime} en nuestra oficina: ${locName}, ${locAddr}. Revisa y confirma aquí: ${confirmLink}`
+      : `Hi ${appointment.candidateName}, your 2nd interview for Ellianos Coffee has been updated to ${formattedTime} at our office: ${locName}, ${locAddr}. Review and confirm here: ${confirmLink}`;
 
     smsSent = await sendInterviewSms(appointment.candidatePhone, smsText);
   }
@@ -2517,6 +2795,8 @@ app.get("/api/appointment", appointmentCandidateLimiter, async (req, res) => {
     return res.status(404).json({ error: "Appointment not found or has been cancelled." });
   }
 
+  const settings = await getStoredSettings();
+
   // Calculate upcoming available slots for next 14 days
   const allAppointments = await getStoredAppointments();
   const availableSlots: Array<{ date: string; startUtc: string; endUtc: string; label: string }> = [];
@@ -2526,7 +2806,7 @@ app.get("/api/appointment", appointmentCandidateLimiter, async (req, res) => {
 
   for (let i = 1; i <= 14; i++) {
     const dateStr = addDaysToDateString(todayStr, i);
-    const daySlots = getDailyFloridaSlots(dateStr, allAppointments, appointment.id);
+    const daySlots = getDailyFloridaSlots(dateStr, allAppointments, appointment.id, settings);
     for (const s of daySlots) {
       if (!s.taken && new Date(s.startUtc).getTime() > nowTime + 2 * 3600000) {
         availableSlots.push({
@@ -2549,6 +2829,8 @@ app.get("/api/appointment", appointmentCandidateLimiter, async (req, res) => {
     status: appointment.status,
     language: appointment.createdByLang || 'en',
     notes: appointment.notes,
+    interviewLocationName: settings.interviewLocationName,
+    interviewLocationAddress: settings.interviewLocationAddress,
     availableSlots
   });
 });
@@ -2594,8 +2876,9 @@ app.post("/api/appointment/reschedule", appointmentCandidateLimiter, async (req,
     return res.status(400).json({ error: "Missing startUtc" });
   }
 
-  if (!isValidFloridaSlot(startUtc)) {
-    return res.status(400).json({ error: "Selected slot must be on the hour between 9:00 AM and 5:00 PM Florida time." });
+  const settings = await getStoredSettings();
+  if (!isValidFloridaSlot(startUtc, settings)) {
+    return res.status(400).json({ error: "Selected slot does not match configured interview schedule rules." });
   }
 
   const appointment = await getAppointmentByToken(token);
@@ -2609,8 +2892,9 @@ app.post("/api/appointment/reschedule", appointmentCandidateLimiter, async (req,
     return res.status(409).json({ error: "This time slot is no longer available. Please select another slot." });
   }
 
+  const duration = settings.slotDurationMinutes || 60;
   appointment.startUtc = startUtc;
-  appointment.endUtc = new Date(new Date(startUtc).getTime() + 3600000).toISOString();
+  appointment.endUtc = new Date(new Date(startUtc).getTime() + duration * 60000).toISOString();
   appointment.status = 'confirmed';
   appointment.updatedAt = new Date().toISOString();
   await upsertAppointment(appointment);
@@ -2629,6 +2913,7 @@ app.post("/api/appointment/reschedule", appointmentCandidateLimiter, async (req,
     }
   });
 });
+
 
 app.post("/api/admin/sessions/:id/live-interview/analyze", liveInterviewAnalyzeLimiter, async (req, res) => {
   const authHeader = req.headers["x-admin-passcode"] as string | undefined;

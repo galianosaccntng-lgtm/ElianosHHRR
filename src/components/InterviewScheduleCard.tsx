@@ -410,7 +410,7 @@ export function InterviewScheduleCard({
                   {modalMode === 'schedule' ? t.scheduleModalTitle : t.scheduleRescheduleBtn}
                 </h3>
                 <p className="text-xs text-stone-500 mt-0.5">
-                  {candidateName} • Lehigh Acres, FL
+                  {candidateName} • 10-4 Truck Parts Office (Lehigh Acres, FL)
                 </p>
               </div>
               <button

@@ -1,12 +1,14 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { InterviewSession, InterviewStatus, SecondInterviewGuide, SecondInterviewScores, Position } from '../types';
-import { ArrowLeft, CheckCircle2, MessageSquare, ChevronRight, FileText, Trash2, Award, Copy, Check, ShieldCheck, LogOut, RefreshCw, Search, Mail, Phone, Loader2, AlertCircle, Clock, PlayCircle, ExternalLink, RotateCcw, Sparkles, Star, HelpCircle, Save, Printer } from 'lucide-react';
+import { ArrowLeft, CheckCircle2, MessageSquare, ChevronRight, FileText, Trash2, Award, Copy, Check, ShieldCheck, LogOut, RefreshCw, Search, Mail, Phone, Loader2, AlertCircle, Clock, PlayCircle, ExternalLink, RotateCcw, Sparkles, Star, HelpCircle, Save, Printer, Calendar, Settings, User } from 'lucide-react';
 import clsx from 'clsx';
 import Markdown from 'react-markdown';
 import { humanConfidence } from '../authenticity';
 import { adminI18n, AdminLang, getInitialAdminLang, setSavedAdminLang } from '../i18n-admin';
 import { LiveInterviewPanel } from "./LiveInterviewPanel";
 import { InterviewScheduleCard } from "./InterviewScheduleCard";
+import { AdminScheduleView } from "./AdminScheduleView";
+import { AdminSettingsView } from "./AdminSettingsView";
 
 interface DashboardProps {
   adminToken: string | null;
@@ -574,6 +576,7 @@ export function Dashboard({ adminToken, onBack, onLogout, onResume, onDelete, on
     }
   });
   const [viewTrash, setViewTrash] = useState(false);
+  const [globalNav, setGlobalNav] = useState<'candidates' | 'agenda' | 'settings'>('candidates');
   const [isLoading, setIsLoading] = useState(true);
   const [isEvaluating, setIsEvaluating] = useState(false);
   const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null);
@@ -1136,6 +1139,46 @@ ${t.copyContactStatus} ${effectiveStatusLabel}`;
               {t.hrBadge}
             </span>
           </div>
+
+          {/* Global Navigation Tabs: Candidates | Agenda | Settings */}
+          <div className="hidden md:flex items-center bg-[#FAF7F2] border border-[#E8DFD8] rounded-xl p-1 ml-2 shadow-2xs">
+            <button
+              onClick={() => { setGlobalNav('candidates'); setViewTrash(false); }}
+              className={clsx(
+                "px-3 py-1.5 text-xs font-bold rounded-lg transition-all flex items-center gap-1.5",
+                globalNav === 'candidates' && !viewTrash
+                  ? "bg-[#4B2C20] text-[#FAF7F2] shadow-xs"
+                  : "text-[#4B2C20]/70 hover:text-[#4B2C20]"
+              )}
+            >
+              <User className="w-3.5 h-3.5" />
+              <span>{t.navCandidates}</span>
+            </button>
+            <button
+              onClick={() => { setGlobalNav('agenda'); setSelectedSessionId(null); setViewTrash(false); }}
+              className={clsx(
+                "px-3 py-1.5 text-xs font-bold rounded-lg transition-all flex items-center gap-1.5",
+                globalNav === 'agenda'
+                  ? "bg-[#4B2C20] text-[#FAF7F2] shadow-xs"
+                  : "text-[#4B2C20]/70 hover:text-[#4B2C20]"
+              )}
+            >
+              <Calendar className="w-3.5 h-3.5" />
+              <span>{t.navAgenda}</span>
+            </button>
+            <button
+              onClick={() => { setGlobalNav('settings'); setSelectedSessionId(null); setViewTrash(false); }}
+              className={clsx(
+                "px-3 py-1.5 text-xs font-bold rounded-lg transition-all flex items-center gap-1.5",
+                globalNav === 'settings'
+                  ? "bg-[#4B2C20] text-[#FAF7F2] shadow-xs"
+                  : "text-[#4B2C20]/70 hover:text-[#4B2C20]"
+              )}
+            >
+              <Settings className="w-3.5 h-3.5" />
+              <span>{t.navSettings}</span>
+            </button>
+          </div>
         </div>
 
         <div className="flex items-center gap-2 md:gap-3">
@@ -1174,6 +1217,7 @@ ${t.copyContactStatus} ${effectiveStatusLabel}`;
             onClick={() => {
               setViewTrash(prev => !prev);
               setSelectedSessionId(null);
+              setGlobalNav('candidates');
             }}
             className={clsx(
               "flex items-center gap-1.5 px-3 py-2 text-xs font-bold uppercase tracking-wider rounded-xl transition-colors border shadow-xs",
@@ -1203,8 +1247,64 @@ ${t.copyContactStatus} ${effectiveStatusLabel}`;
         </div>
       </header>
 
-      <main className="flex-1 p-6 md:p-12 overflow-y-auto">
-        <div className="max-w-5xl mx-auto">
+      {/* Mobile Sub-Navigation Bar */}
+      <div className="flex md:hidden bg-white border-b border-[#E8DFD8] px-4 py-2 items-center justify-around gap-1 shrink-0">
+        <button
+          onClick={() => { setGlobalNav('candidates'); setViewTrash(false); }}
+          className={clsx(
+            "flex-1 py-1.5 px-2 text-xs font-bold rounded-lg transition-all flex items-center justify-center gap-1",
+            globalNav === 'candidates' && !viewTrash
+              ? "bg-[#4B2C20] text-[#FAF7F2]"
+              : "text-[#4B2C20]/70 hover:bg-[#FAF7F2]"
+          )}
+        >
+          <User className="w-3.5 h-3.5" />
+          <span>{t.navCandidates}</span>
+        </button>
+        <button
+          onClick={() => { setGlobalNav('agenda'); setSelectedSessionId(null); setViewTrash(false); }}
+          className={clsx(
+            "flex-1 py-1.5 px-2 text-xs font-bold rounded-lg transition-all flex items-center justify-center gap-1",
+            globalNav === 'agenda'
+              ? "bg-[#4B2C20] text-[#FAF7F2]"
+              : "text-[#4B2C20]/70 hover:bg-[#FAF7F2]"
+          )}
+        >
+          <Calendar className="w-3.5 h-3.5" />
+          <span>{t.navAgenda}</span>
+        </button>
+        <button
+          onClick={() => { setGlobalNav('settings'); setSelectedSessionId(null); setViewTrash(false); }}
+          className={clsx(
+            "flex-1 py-1.5 px-2 text-xs font-bold rounded-lg transition-all flex items-center justify-center gap-1",
+            globalNav === 'settings'
+              ? "bg-[#4B2C20] text-[#FAF7F2]"
+              : "text-[#4B2C20]/70 hover:bg-[#FAF7F2]"
+          )}
+        >
+          <Settings className="w-3.5 h-3.5" />
+          <span>{t.navSettings}</span>
+        </button>
+      </div>
+
+      <main className="flex-1 p-4 md:p-10 overflow-y-auto">
+        {globalNav === 'agenda' ? (
+          <AdminScheduleView
+            adminToken={adminToken || ''}
+            lang={lang}
+            onSelectCandidateSession={(sessionId) => {
+              setGlobalNav('candidates');
+              setSelectedSessionId(sessionId);
+              setViewTrash(false);
+            }}
+          />
+        ) : globalNav === 'settings' ? (
+          <AdminSettingsView
+            adminToken={adminToken || ''}
+            lang={lang}
+          />
+        ) : (
+          <div className="max-w-5xl mx-auto">
           {viewTrash ? (
             <div>
               <div className="flex flex-col md:flex-row md:items-end justify-between gap-4 mb-6">
@@ -2854,6 +2954,7 @@ ${t.copyContactStatus} ${effectiveStatusLabel}`;
             </>
           )}
         </div>
+        )}
       </main>
     </div>
   );

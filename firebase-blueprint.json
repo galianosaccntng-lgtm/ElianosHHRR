@@ -35,9 +35,22 @@
         "token": { "type": "string" },
         "createdAt": { "type": "string" },
         "updatedAt": { "type": "string" },
-        "createdByLang": { "type": "string" }
+        "createdByLang": { "type": "string" },
+        "type": { "type": "string" }
       },
-      "required": ["id", "sessionId", "startUtc", "status", "token"]
+      "required": ["id", "sessionId", "startUtc", "status"]
+    },
+    "appSettings": {
+      "title": "Application Settings",
+      "description": "Global application configuration for interview location and scheduling",
+      "properties": {
+        "interviewLocationName": { "type": "string" },
+        "interviewLocationAddress": { "type": "string" },
+        "scheduleDays": { "type": "array" },
+        "scheduleStartHour": { "type": "number" },
+        "scheduleEndHour": { "type": "number" },
+        "slotDurationMinutes": { "type": "number" }
+      }
     }
   },
   "firestore": {
@@ -60,6 +73,12 @@
         "path": "/interviewAppointments/{appointmentId}",
         "schema": {
           "$ref": "#/entities/interviewAppointments"
+        }
+      },
+      "appSettings": {
+        "path": "/appSettings/{docId}",
+        "schema": {
+          "$ref": "#/entities/appSettings"
         }
       }
     }

@@ -189,6 +189,7 @@ export interface InterviewSession {
 }
 
 export type AppointmentStatus = 'pending' | 'confirmed' | 'reschedule_requested' | 'cancelled';
+export type AppointmentType = 'interview' | 'blocked';
 
 export interface InterviewAppointment {
   id: string;
@@ -197,8 +198,9 @@ export interface InterviewAppointment {
   candidatePhone: string;
   candidateEmail: string;
   startUtc: string; // ISO string
-  endUtc: string;   // ISO string (1 hour after startUtc)
+  endUtc: string;   // ISO string
   status: AppointmentStatus;
+  type?: AppointmentType; // default 'interview'
   token: string;    // Secure token for candidate actions
   createdAt: string;
   updatedAt: string;
@@ -212,4 +214,13 @@ export interface AppointmentSlot {
   endUtc: string;
   label: string;
   taken: boolean;
+}
+
+export interface AppSettings {
+  interviewLocationName: string;
+  interviewLocationAddress: string;
+  scheduleDays: number[]; // 0=Sun, 1=Mon, 2=Tue, 3=Wed, 4=Thu, 5=Fri, 6=Sat
+  scheduleStartHour: number; // e.g. 9
+  scheduleEndHour: number;   // e.g. 17
+  slotDurationMinutes: number; // e.g. 60
 }
