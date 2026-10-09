@@ -90,6 +90,8 @@ const liveInterviewAnalyzeLimiter = createRateLimiter(60 * 60 * 1000, 400, "Too 
 const liveInterviewProbeLimiter = createRateLimiter(60 * 60 * 1000, 60, "Too many probe question requests. Please try again later.");
 const liveInterviewFinalEvalLimiter = createRateLimiter(60 * 60 * 1000, 20, "Too many final evaluation requests. Please try again later (maximum 20 per hour).");
 const liveInterviewCrossEvalLimiter = createRateLimiter(60 * 60 * 1000, 20, "Too many cross-position evaluation requests. Please try again later (maximum 20 per hour).");
+const appointmentAdminLimiter = createRateLimiter(15 * 60 * 1000, 100, "Too many appointment requests. Please wait a few minutes.");
+const appointmentCandidateLimiter = createRateLimiter(15 * 60 * 1000, 60, "Too many appointment requests. Please wait a few minutes.");
 
 // Centralized admin authentication verification helper
 function verifyAdminAccess(provided: string | undefined, res: express.Response): boolean {
@@ -906,13 +908,14 @@ app.post("/api/sessions/sync", sessionSyncLimiter, async (req, res) => {
       }
     }
 
-    // Strip deletedAt, interview guide/scores, and onboarding from candidate sync payload to prevent unauthorized modification
+    // Strip deletedAt, interview guide/scores, onboarding, and appointment from candidate sync payload to prevent unauthorized modification
     const {
       deletedAt: _ignoredDeletedAt,
       secondInterviewGuide: _ignoredGuide,
       secondInterviewScores: _ignoredScores,
       onboarding: _ignoredOnboarding,
       liveInterview: _ignoredLiveInterview,
+      appointment: _ignoredAppointment,
       ...cleanSession
     } = session;
 
@@ -1949,6 +1952,682 @@ app.post("/api/onboarding/upload", upload.single("file"), async (req, res) => {
     console.error("Upload error", err);
     res.status(500).json({ error: "Upload failed" });
   }
+});
+
+// ============================================================================
+// INTERVIEW APPOINTMENTS & RINGCENTRAL SMS SUBSYSTEM
+// ============================================================================
+
+export interface InterviewAppointmentRecord {
+  id: string;
+  sessionId: string;
+  candidateName: string;
+  candidatePhone: string;
+  candidateEmail: string;
+  startUtc: string; // ISO
+  endUtc: string;   // ISO (1 hour after startUtc)
+  status: 'pending' | 'confirmed' | 'reschedule_requested' | 'cancelled';
+  token: string;
+  createdAt: string;
+  updatedAt: string;
+  createdByLang?: 'en' | 'es';
+  notes?: string;
+  smsSent?: boolean;
+}
+
+const APPOINTMENTS_FILE = path.join(DATA_DIR, "appointments.json");
+
+function ensureAppointmentsDataFile() {
+  ensureLocalDataFile();
+  if (!fs.existsSync(APPOINTMENTS_FILE)) {
+    fs.writeFileSync(APPOINTMENTS_FILE, JSON.stringify([]), "utf-8");
+  }
+}
+
+function getLocalAppointments(): InterviewAppointmentRecord[] {
+  ensureAppointmentsDataFile();
+  try {
+    const raw = fs.readFileSync(APPOINTMENTS_FILE, "utf-8");
+    return JSON.parse(raw);
+  } catch (err) {
+    console.error("[LocalStorage] Error reading appointments file:", err);
+    return [];
+  }
+}
+
+function saveLocalAppointments(appts: InterviewAppointmentRecord[]) {
+  ensureAppointmentsDataFile();
+  try {
+    fs.writeFileSync(APPOINTMENTS_FILE, JSON.stringify(appts, null, 2), "utf-8");
+  } catch (err) {
+    console.error("[LocalStorage] Error writing appointments file:", err);
+  }
+}
+
+async function syncLocalAppointmentsToFirestoreIfEmpty() {
+  if (!firestoreClient) return;
+  try {
+    const snapshot = await firestoreClient.collection("interviewAppointments").limit(1).get();
+    if (snapshot.empty) {
+      const local = getLocalAppointments();
+      if (local.length > 0) {
+        console.log(`[Storage] Seeding ${local.length} existing local appointments to Cloud Firestore...`);
+        for (const item of local) {
+          await firestoreClient.collection("interviewAppointments").doc(item.id).set(item, { merge: true });
+        }
+        console.log("[Storage] Cloud Firestore appointments seeded successfully.");
+      }
+    }
+  } catch (e) {
+    handleFirestoreError('Cloud Firestore initial appointments check', e);
+  }
+}
+syncLocalAppointmentsToFirestoreIfEmpty();
+
+async function getStoredAppointments(): Promise<InterviewAppointmentRecord[]> {
+  if (firestoreClient) {
+    try {
+      const snapshot = await firestoreClient.collection("interviewAppointments").get();
+      const list: InterviewAppointmentRecord[] = [];
+      snapshot.forEach((docSnap) => {
+        list.push(docSnap.data() as InterviewAppointmentRecord);
+      });
+      return list;
+    } catch (fsErr) {
+      handleFirestoreError('Firestore appointments read error', fsErr);
+    }
+  }
+  return getLocalAppointments();
+}
+
+async function getAppointmentById(id: string): Promise<InterviewAppointmentRecord | null> {
+  if (firestoreClient) {
+    try {
+      const docSnap = await firestoreClient.collection("interviewAppointments").doc(id).get();
+      if (docSnap.exists) {
+        return docSnap.data() as InterviewAppointmentRecord;
+      }
+    } catch (fsErr) {
+      handleFirestoreError('Firestore appointment by id error', fsErr);
+    }
+  }
+  return getLocalAppointments().find((a) => a.id === id) || null;
+}
+
+async function getAppointmentByToken(token: string): Promise<InterviewAppointmentRecord | null> {
+  if (firestoreClient) {
+    try {
+      const snapshot = await firestoreClient.collection("interviewAppointments").where("token", "==", token).limit(1).get();
+      if (!snapshot.empty) {
+        return snapshot.docs[0].data() as InterviewAppointmentRecord;
+      }
+    } catch (fsErr) {
+      handleFirestoreError('Firestore appointment by token error', fsErr);
+    }
+  }
+  return getLocalAppointments().find((a) => a.token === token) || null;
+}
+
+async function getActiveAppointmentBySessionId(sessionId: string): Promise<InterviewAppointmentRecord | null> {
+  const all = await getStoredAppointments();
+  const sessionAppts = all
+    .filter((a) => a.sessionId === sessionId)
+    .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+  
+  const active = sessionAppts.find((a) => a.status !== 'cancelled');
+  return active || sessionAppts[0] || null;
+}
+
+async function upsertAppointment(appt: InterviewAppointmentRecord): Promise<void> {
+  if (firestoreClient) {
+    try {
+      await firestoreClient.collection("interviewAppointments").doc(appt.id).set(appt, { merge: true });
+    } catch (fsErr) {
+      handleFirestoreError('Firestore upsert appointment error', fsErr);
+    }
+  }
+  const local = getLocalAppointments();
+  const idx = local.findIndex((a) => a.id === appt.id);
+  if (idx >= 0) {
+    local[idx] = appt;
+  } else {
+    local.push(appt);
+  }
+  saveLocalAppointments(local);
+}
+
+// ----------------------------------------------------------------------------
+// Florida (America/New_York) Timezone & Slot Helper Functions
+// ----------------------------------------------------------------------------
+function getFloridaSlotIso(dateStr: string, hour: number): string {
+  const pad = (n: number) => String(n).padStart(2, "0");
+  const guess = new Date(`${dateStr}T${pad(hour)}:00:00Z`);
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: "America/New_York",
+    year: "numeric", month: "2-digit", day: "2-digit",
+    hour: "2-digit", minute: "2-digit", second: "2-digit",
+    hour12: false
+  }).formatToParts(guess);
+  const p = Object.fromEntries(parts.map((x) => [x.type, x.value]));
+  const nyHour = parseInt(p.hour === "24" ? "00" : p.hour, 10);
+  const diffHours = hour - nyHour;
+  return new Date(guess.getTime() + diffHours * 3600000).toISOString();
+}
+
+function formatFloridaDateTime(isoString: string, lang: 'en' | 'es' = 'en'): string {
+  const d = new Date(isoString);
+  const formatted = new Intl.DateTimeFormat(lang === "es" ? "es-US" : "en-US", {
+    timeZone: "America/New_York",
+    weekday: "short",
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+    hour12: true
+  }).format(d);
+  return `${formatted} ET`;
+}
+
+function formatFloridaSlotLabel(startIso: string): string {
+  const startDate = new Date(startIso);
+  const endDate = new Date(startDate.getTime() + 3600000);
+  const timeFormat = (d: Date) => new Intl.DateTimeFormat("en-US", {
+    timeZone: "America/New_York",
+    hour: "numeric",
+    minute: "2-digit",
+    hour12: true
+  }).format(d);
+  return `${timeFormat(startDate)} - ${timeFormat(endDate)} ET`;
+}
+
+function isValidFloridaSlot(isoString: string): boolean {
+  const d = new Date(isoString);
+  if (isNaN(d.getTime())) return false;
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: "America/New_York",
+    year: "numeric", month: "2-digit", day: "2-digit",
+    hour: "2-digit", minute: "2-digit", second: "2-digit",
+    hour12: false
+  }).formatToParts(d);
+  const p = Object.fromEntries(parts.map((x) => [x.type, x.value]));
+  const hour = parseInt(p.hour === "24" ? "00" : p.hour, 10);
+  const min = parseInt(p.minute, 10);
+  const sec = parseInt(p.second, 10);
+  return min === 0 && sec === 0 && hour >= 9 && hour <= 16;
+}
+
+function getDailyFloridaSlots(dateStr: string, allAppointments: InterviewAppointmentRecord[], excludeAppointmentId?: string) {
+  const hours = [9, 10, 11, 12, 13, 14, 15, 16];
+  return hours.map((h) => {
+    const startUtc = getFloridaSlotIso(dateStr, h);
+    const endUtc = new Date(new Date(startUtc).getTime() + 3600000).toISOString();
+    const label = formatFloridaSlotLabel(startUtc);
+    const taken = allAppointments.some((a) => 
+      a.status !== 'cancelled' &&
+      a.startUtc === startUtc &&
+      (!excludeAppointmentId || a.id !== excludeAppointmentId)
+    );
+    return {
+      startUtc,
+      endUtc,
+      label,
+      taken
+    };
+  });
+}
+
+function getFloridaTodayDateString(): string {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: "America/New_York",
+    year: "numeric", month: "2-digit", day: "2-digit"
+  }).formatToParts(new Date());
+  const p = Object.fromEntries(parts.map((x) => [x.type, x.value]));
+  return `${p.year}-${p.month}-${p.day}`;
+}
+
+function addDaysToDateString(dateStr: string, days: number): string {
+  const [y, m, d] = dateStr.split("-").map((v) => parseInt(v, 10));
+  const dateObj = new Date(Date.UTC(y, m - 1, d + days, 12, 0, 0));
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${dateObj.getUTCFullYear()}-${pad(dateObj.getUTCMonth() + 1)}-${pad(dateObj.getUTCDate())}`;
+}
+
+// ----------------------------------------------------------------------------
+// RingCentral SMS Integration
+// ----------------------------------------------------------------------------
+interface RingCentralTokenCache {
+  accessToken: string;
+  expiresAt: number;
+}
+let rcTokenCache: RingCentralTokenCache | null = null;
+
+async function getRingCentralAccessToken(): Promise<string | null> {
+  const clientId = process.env.RINGCENTRAL_CLIENT_ID;
+  const clientSecret = process.env.RINGCENTRAL_CLIENT_SECRET;
+  const jwt = process.env.RINGCENTRAL_JWT;
+  const serverUrl = (process.env.RINGCENTRAL_SERVER_URL || "https://platform.ringcentral.com").replace(/\/$/, "");
+
+  if (!clientId || !clientSecret || !jwt) {
+    console.warn("[RingCentral] Missing RINGCENTRAL_CLIENT_ID, RINGCENTRAL_CLIENT_SECRET, or RINGCENTRAL_JWT in environment");
+    return null;
+  }
+
+  if (rcTokenCache && rcTokenCache.expiresAt > Date.now() + 60000) {
+    return rcTokenCache.accessToken;
+  }
+
+  try {
+    const basicAuth = Buffer.from(`${clientId}:${clientSecret}`).toString("base64");
+    const bodyParams = new URLSearchParams();
+    bodyParams.set("grant_type", "urn:ietf:params:oauth:grant-type:jwt-bearer");
+    bodyParams.set("assertion", jwt);
+
+    const resp = await fetch(`${serverUrl}/restapi/oauth/token`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/x-www-form-urlencoded",
+        "Authorization": `Basic ${basicAuth}`
+      },
+      body: bodyParams.toString()
+    });
+
+    if (!resp.ok) {
+      const errText = await resp.text();
+      console.warn(`[RingCentral] Token exchange failed HTTP ${resp.status}:`, errText);
+      return null;
+    }
+
+    const data = await resp.json() as any;
+    if (data.access_token) {
+      rcTokenCache = {
+        accessToken: data.access_token,
+        expiresAt: Date.now() + ((data.expires_in || 3600) * 1000)
+      };
+      return data.access_token;
+    }
+    return null;
+  } catch (err: any) {
+    console.warn("[RingCentral] Token exchange error:", err?.message || err);
+    return null;
+  }
+}
+
+function normalizePhoneForSms(rawPhone: string): string {
+  if (!rawPhone) return "";
+  const cleaned = rawPhone.replace(/[^\d+]/g, "");
+  if (cleaned.startsWith("+")) return cleaned;
+  const digits = cleaned.replace(/\D/g, "");
+  if (digits.length === 10) return `+1${digits}`;
+  if (digits.length === 11 && digits.startsWith("1")) return `+${digits}`;
+  return cleaned ? `+${cleaned}` : "";
+}
+
+async function sendInterviewSms(toPhone: string, text: string): Promise<boolean> {
+  const fromNumber = process.env.RINGCENTRAL_FROM_NUMBER;
+  const serverUrl = (process.env.RINGCENTRAL_SERVER_URL || "https://platform.ringcentral.com").replace(/\/$/, "");
+
+  if (!fromNumber) {
+    console.warn("[RingCentral] RINGCENTRAL_FROM_NUMBER is not configured.");
+    return false;
+  }
+
+  const normalizedTo = normalizePhoneForSms(toPhone);
+  if (!normalizedTo) {
+    console.warn(`[RingCentral] Invalid or empty recipient phone: "${toPhone}"`);
+    return false;
+  }
+
+  const token = await getRingCentralAccessToken();
+  if (!token) {
+    console.warn("[RingCentral] Could not obtain access token, SMS not sent.");
+    return false;
+  }
+
+  try {
+    const resp = await fetch(`${serverUrl}/restapi/v1.0/account/~/extension/~/sms`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Authorization": `Bearer ${token}`
+      },
+      body: JSON.stringify({
+        from: { phoneNumber: normalizePhoneForSms(fromNumber) },
+        to: [{ phoneNumber: normalizedTo }],
+        text: text
+      })
+    });
+
+    if (!resp.ok) {
+      const errText = await resp.text();
+      console.warn(`[RingCentral] Send SMS failed HTTP ${resp.status}:`, errText);
+      return false;
+    }
+
+    console.log(`[RingCentral] SMS successfully sent to ${normalizedTo}`);
+    return true;
+  } catch (err: any) {
+    console.warn("[RingCentral] Error sending SMS:", err?.message || err);
+    return false;
+  }
+}
+
+// ----------------------------------------------------------------------------
+// Admin Appointment Endpoints
+// ----------------------------------------------------------------------------
+
+app.get("/api/admin/appointments/availability", appointmentAdminLimiter, async (req, res) => {
+  const authHeader = req.headers["x-admin-passcode"] as string | undefined;
+  if (!verifyAdminAccess(authHeader, res)) return;
+
+  const dateStr = String(req.query.date || "").trim();
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(dateStr)) {
+    return res.status(400).json({ error: "Invalid date format. Expected YYYY-MM-DD." });
+  }
+
+  try {
+    const excludeId = req.query.excludeId ? String(req.query.excludeId) : undefined;
+    const appointments = await getStoredAppointments();
+    const slots = getDailyFloridaSlots(dateStr, appointments, excludeId);
+    res.json({ date: dateStr, slots });
+  } catch (err: any) {
+    console.error("[Appointments] Availability check error:", err);
+    res.status(500).json({ error: err.message || "Failed to check availability" });
+  }
+});
+
+app.post("/api/admin/sessions/:id/schedule-interview", appointmentAdminLimiter, async (req, res) => {
+  const authHeader = req.headers["x-admin-passcode"] as string | undefined;
+  if (!verifyAdminAccess(authHeader, res)) return;
+
+  const { id } = req.params;
+  const { startUtc, lang = 'en', notes } = req.body || {};
+
+  if (!startUtc || typeof startUtc !== "string") {
+    return res.status(400).json({ error: "Missing or invalid startUtc" });
+  }
+
+  if (!isValidFloridaSlot(startUtc)) {
+    return res.status(400).json({ error: "Slot must be on the hour between 9:00 AM and 5:00 PM Florida time (America/New_York)." });
+  }
+
+  const sessions = await getStoredSessions();
+  const session = sessions.find((s) => s.id === id);
+  if (!session) {
+    return res.status(404).json({ error: "Candidate session not found" });
+  }
+
+  // Check double-booking
+  const allAppointments = await getStoredAppointments();
+  const isTaken = allAppointments.some((a) => a.status !== 'cancelled' && a.startUtc === startUtc);
+  if (isTaken) {
+    return res.status(409).json({ error: "This time slot is already booked. Please choose another." });
+  }
+
+  // Cancel prior active appointments for this candidate
+  const prior = allAppointments.filter((a) => a.sessionId === id && a.status !== 'cancelled');
+  for (const p of prior) {
+    p.status = 'cancelled';
+    p.updatedAt = new Date().toISOString();
+    await upsertAppointment(p);
+  }
+
+  const token = crypto.randomBytes(24).toString("hex");
+  const endUtc = new Date(new Date(startUtc).getTime() + 3600000).toISOString();
+  const effectiveLang: 'en' | 'es' = lang === 'es' ? 'es' : 'en';
+
+  const appointment: InterviewAppointmentRecord = {
+    id: crypto.randomUUID(),
+    sessionId: session.id,
+    candidateName: session.candidateInfo?.name || "Candidate",
+    candidatePhone: session.candidateInfo?.phone || "",
+    candidateEmail: session.candidateInfo?.email || "",
+    startUtc,
+    endUtc,
+    status: 'pending',
+    token,
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+    createdByLang: effectiveLang,
+    notes: typeof notes === "string" ? notes.trim() : undefined,
+    smsSent: false
+  };
+
+  // Build confirmation link
+  const appUrl = (process.env.APP_URL ? process.env.APP_URL.trim() : "").replace(/\/$/, "");
+  const baseOrigin = appUrl || `${req.protocol}://${req.get("host")}`;
+  const confirmLink = `${baseOrigin}/confirm-interview?token=${token}`;
+
+  // Send SMS via RingCentral
+  let smsSent = false;
+  if (appointment.candidatePhone) {
+    const formattedTime = formatFloridaDateTime(appointment.startUtc, effectiveLang);
+    const smsText = effectiveLang === 'es'
+      ? `Hola ${appointment.candidateName}, te invitamos a tu 2ª entrevista presencial en Ellianos Coffee (Lehigh Acres, FL) el ${formattedTime}. Confirma o reagenda aquí: ${confirmLink}`
+      : `Hi ${appointment.candidateName}, you're invited to your 2nd interview in person at Ellianos Coffee (Lehigh Acres, FL) on ${formattedTime}. Confirm or reschedule here: ${confirmLink}`;
+
+    smsSent = await sendInterviewSms(appointment.candidatePhone, smsText);
+  } else {
+    console.warn(`[Appointments] Candidate ${session.id} has no phone number, skipping SMS`);
+  }
+
+  appointment.smsSent = smsSent;
+  await upsertAppointment(appointment);
+
+  res.json({
+    success: true,
+    appointment,
+    smsSent,
+    confirmLink
+  });
+});
+
+app.post("/api/admin/appointments/:id/cancel", appointmentAdminLimiter, async (req, res) => {
+  const authHeader = req.headers["x-admin-passcode"] as string | undefined;
+  if (!verifyAdminAccess(authHeader, res)) return;
+
+  const { id } = req.params;
+  const appointment = await getAppointmentById(id);
+  if (!appointment) {
+    return res.status(404).json({ error: "Appointment not found" });
+  }
+
+  appointment.status = 'cancelled';
+  appointment.updatedAt = new Date().toISOString();
+  await upsertAppointment(appointment);
+
+  res.json({ success: true, appointment });
+});
+
+app.post("/api/admin/appointments/:id/reschedule", appointmentAdminLimiter, async (req, res) => {
+  const authHeader = req.headers["x-admin-passcode"] as string | undefined;
+  if (!verifyAdminAccess(authHeader, res)) return;
+
+  const { id } = req.params;
+  const { startUtc } = req.body || {};
+
+  if (!startUtc || typeof startUtc !== "string") {
+    return res.status(400).json({ error: "Missing startUtc" });
+  }
+
+  if (!isValidFloridaSlot(startUtc)) {
+    return res.status(400).json({ error: "Slot must be on the hour between 9:00 AM and 5:00 PM Florida time." });
+  }
+
+  const appointment = await getAppointmentById(id);
+  if (!appointment) {
+    return res.status(404).json({ error: "Appointment not found" });
+  }
+
+  // Check double-booking (excluding this appointment)
+  const allAppointments = await getStoredAppointments();
+  const isTaken = allAppointments.some((a) => a.id !== id && a.status !== 'cancelled' && a.startUtc === startUtc);
+  if (isTaken) {
+    return res.status(409).json({ error: "This time slot is already booked. Please choose another." });
+  }
+
+  appointment.startUtc = startUtc;
+  appointment.endUtc = new Date(new Date(startUtc).getTime() + 3600000).toISOString();
+  appointment.status = 'pending';
+  appointment.updatedAt = new Date().toISOString();
+
+  // Resend SMS
+  let smsSent = false;
+  const appUrl = (process.env.APP_URL ? process.env.APP_URL.trim() : "").replace(/\/$/, "");
+  const baseOrigin = appUrl || `${req.protocol}://${req.get("host")}`;
+  const confirmLink = `${baseOrigin}/confirm-interview?token=${appointment.token}`;
+  const lang = appointment.createdByLang || 'en';
+
+  if (appointment.candidatePhone) {
+    const formattedTime = formatFloridaDateTime(appointment.startUtc, lang);
+    const smsText = lang === 'es'
+      ? `Hola ${appointment.candidateName}, el horario de tu 2ª entrevista en Ellianos Coffee ha sido actualizado para ${formattedTime}. Revisa y confirma aquí: ${confirmLink}`
+      : `Hi ${appointment.candidateName}, your 2nd interview at Ellianos Coffee has been updated to ${formattedTime}. Review and confirm here: ${confirmLink}`;
+
+    smsSent = await sendInterviewSms(appointment.candidatePhone, smsText);
+  }
+
+  appointment.smsSent = smsSent;
+  await upsertAppointment(appointment);
+
+  res.json({ success: true, appointment, smsSent, confirmLink });
+});
+
+app.get("/api/admin/sessions/:id/appointment", appointmentAdminLimiter, async (req, res) => {
+  const authHeader = req.headers["x-admin-passcode"] as string | undefined;
+  if (!verifyAdminAccess(authHeader, res)) return;
+
+  const { id } = req.params;
+  const appointment = await getActiveAppointmentBySessionId(id);
+  res.json({ appointment: appointment || null });
+});
+
+// ----------------------------------------------------------------------------
+// Candidate Token-Based Endpoints
+// ----------------------------------------------------------------------------
+
+app.get("/api/appointment", appointmentCandidateLimiter, async (req, res) => {
+  const token = String(req.query.token || "").trim();
+  if (!token) {
+    return res.status(400).json({ error: "Missing appointment token" });
+  }
+
+  const appointment = await getAppointmentByToken(token);
+  if (!appointment || appointment.status === 'cancelled') {
+    return res.status(404).json({ error: "Appointment not found or has been cancelled." });
+  }
+
+  // Calculate upcoming available slots for next 14 days
+  const allAppointments = await getStoredAppointments();
+  const availableSlots: Array<{ date: string; startUtc: string; endUtc: string; label: string }> = [];
+
+  const todayStr = getFloridaTodayDateString();
+  const nowTime = Date.now();
+
+  for (let i = 1; i <= 14; i++) {
+    const dateStr = addDaysToDateString(todayStr, i);
+    const daySlots = getDailyFloridaSlots(dateStr, allAppointments, appointment.id);
+    for (const s of daySlots) {
+      if (!s.taken && new Date(s.startUtc).getTime() > nowTime + 2 * 3600000) {
+        availableSlots.push({
+          date: dateStr,
+          startUtc: s.startUtc,
+          endUtc: s.endUtc,
+          label: s.label
+        });
+      }
+    }
+  }
+
+  res.json({
+    candidateName: appointment.candidateName,
+    candidatePhone: appointment.candidatePhone,
+    candidateEmail: appointment.candidateEmail,
+    startUtc: appointment.startUtc,
+    endUtc: appointment.endUtc,
+    label: formatFloridaDateTime(appointment.startUtc, appointment.createdByLang || 'en'),
+    status: appointment.status,
+    language: appointment.createdByLang || 'en',
+    notes: appointment.notes,
+    availableSlots
+  });
+});
+
+app.post("/api/appointment/confirm", appointmentCandidateLimiter, async (req, res) => {
+  const token = String(req.query.token || "").trim();
+  if (!token) {
+    return res.status(400).json({ error: "Missing appointment token" });
+  }
+
+  const appointment = await getAppointmentByToken(token);
+  if (!appointment || appointment.status === 'cancelled') {
+    return res.status(404).json({ error: "Appointment not found or has been cancelled." });
+  }
+
+  appointment.status = 'confirmed';
+  appointment.updatedAt = new Date().toISOString();
+  await upsertAppointment(appointment);
+
+  console.log(`[Appointments] Candidate ${appointment.candidateName} confirmed appointment for ${appointment.startUtc}`);
+
+  res.json({
+    success: true,
+    appointment: {
+      id: appointment.id,
+      candidateName: appointment.candidateName,
+      startUtc: appointment.startUtc,
+      endUtc: appointment.endUtc,
+      status: appointment.status,
+      label: formatFloridaDateTime(appointment.startUtc, appointment.createdByLang || 'en')
+    }
+  });
+});
+
+app.post("/api/appointment/reschedule", appointmentCandidateLimiter, async (req, res) => {
+  const token = String(req.query.token || "").trim();
+  const { startUtc } = req.body || {};
+
+  if (!token) {
+    return res.status(400).json({ error: "Missing appointment token" });
+  }
+  if (!startUtc || typeof startUtc !== "string") {
+    return res.status(400).json({ error: "Missing startUtc" });
+  }
+
+  if (!isValidFloridaSlot(startUtc)) {
+    return res.status(400).json({ error: "Selected slot must be on the hour between 9:00 AM and 5:00 PM Florida time." });
+  }
+
+  const appointment = await getAppointmentByToken(token);
+  if (!appointment || appointment.status === 'cancelled') {
+    return res.status(404).json({ error: "Appointment not found or has been cancelled." });
+  }
+
+  const allAppointments = await getStoredAppointments();
+  const isTaken = allAppointments.some((a) => a.id !== appointment.id && a.status !== 'cancelled' && a.startUtc === startUtc);
+  if (isTaken) {
+    return res.status(409).json({ error: "This time slot is no longer available. Please select another slot." });
+  }
+
+  appointment.startUtc = startUtc;
+  appointment.endUtc = new Date(new Date(startUtc).getTime() + 3600000).toISOString();
+  appointment.status = 'confirmed';
+  appointment.updatedAt = new Date().toISOString();
+  await upsertAppointment(appointment);
+
+  console.log(`[Appointments] Candidate ${appointment.candidateName} rescheduled appointment to ${appointment.startUtc}`);
+
+  res.json({
+    success: true,
+    appointment: {
+      id: appointment.id,
+      candidateName: appointment.candidateName,
+      startUtc: appointment.startUtc,
+      endUtc: appointment.endUtc,
+      status: appointment.status,
+      label: formatFloridaDateTime(appointment.startUtc, appointment.createdByLang || 'en')
+    }
+  });
 });
 
 app.post("/api/admin/sessions/:id/live-interview/analyze", liveInterviewAnalyzeLimiter, async (req, res) => {

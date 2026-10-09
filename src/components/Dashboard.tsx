@@ -6,6 +6,7 @@ import Markdown from 'react-markdown';
 import { humanConfidence } from '../authenticity';
 import { adminI18n, AdminLang, getInitialAdminLang, setSavedAdminLang } from '../i18n-admin';
 import { LiveInterviewPanel } from "./LiveInterviewPanel";
+import { InterviewScheduleCard } from "./InterviewScheduleCard";
 
 interface DashboardProps {
   adminToken: string | null;
@@ -2030,6 +2031,16 @@ ${t.copyContactStatus} ${effectiveStatusLabel}`;
               {/* Tab 2: Second Interview Guide (AI Generated & Live Scoring) */}
               {activeTab === 'secondInterview' && (
                 <div className="space-y-6">
+                  {/* Interview Appointment Scheduling Section */}
+                  <InterviewScheduleCard
+                    sessionId={selectedSession.id}
+                    candidateName={selectedSession.candidateInfo?.name || "Candidate"}
+                    candidatePhone={selectedSession.candidateInfo?.phone}
+                    candidateEmail={selectedSession.candidateInfo?.email}
+                    adminToken={adminToken!}
+                    lang={lang}
+                  />
+
                   {selectedSession.secondInterviewGuide ? (
                     <>
                       <LiveInterviewPanel 

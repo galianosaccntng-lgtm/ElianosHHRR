@@ -19,6 +19,25 @@
         "reminderSentAt": { "type": "string" }
       },
       "required": ["id", "candidateName", "role"]
+    },
+    "interviewAppointments": {
+      "title": "Interview Appointment",
+      "description": "Scheduled 2nd in-person interview appointment with token and RingCentral SMS status",
+      "properties": {
+        "id": { "type": "string" },
+        "sessionId": { "type": "string" },
+        "candidateName": { "type": "string" },
+        "candidatePhone": { "type": "string" },
+        "candidateEmail": { "type": "string" },
+        "startUtc": { "type": "string" },
+        "endUtc": { "type": "string" },
+        "status": { "type": "string" },
+        "token": { "type": "string" },
+        "createdAt": { "type": "string" },
+        "updatedAt": { "type": "string" },
+        "createdByLang": { "type": "string" }
+      },
+      "required": ["id", "sessionId", "startUtc", "status", "token"]
     }
   },
   "firestore": {
@@ -36,7 +55,14 @@
             ]
           }
         ]
+      },
+      "interviewAppointments": {
+        "path": "/interviewAppointments/{appointmentId}",
+        "schema": {
+          "$ref": "#/entities/interviewAppointments"
+        }
       }
     }
   }
 }
+

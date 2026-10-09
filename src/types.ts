@@ -185,6 +185,31 @@ export interface InterviewSession {
   secondInterviewScores?: SecondInterviewScores;
   onboarding?: OnboardingState;
   liveInterview?: LiveInterviewState;
+  appointment?: InterviewAppointment;
 }
 
+export type AppointmentStatus = 'pending' | 'confirmed' | 'reschedule_requested' | 'cancelled';
 
+export interface InterviewAppointment {
+  id: string;
+  sessionId: string;
+  candidateName: string;
+  candidatePhone: string;
+  candidateEmail: string;
+  startUtc: string; // ISO string
+  endUtc: string;   // ISO string (1 hour after startUtc)
+  status: AppointmentStatus;
+  token: string;    // Secure token for candidate actions
+  createdAt: string;
+  updatedAt: string;
+  createdByLang?: 'en' | 'es';
+  notes?: string;
+  smsSent?: boolean;
+}
+
+export interface AppointmentSlot {
+  startUtc: string;
+  endUtc: string;
+  label: string;
+  taken: boolean;
+}
