@@ -216,11 +216,22 @@ export interface AppointmentSlot {
   taken: boolean;
 }
 
+export type SlotDurationMinutes = 15 | 30 | 45 | 60 | 90 | 120;
+
+export interface DaySchedule {
+  dayOfWeek: number; // 0=Sun, 1=Mon, 2=Tue, 3=Wed, 4=Thu, 5=Fri, 6=Sat
+  enabled: boolean;
+  startHour: number; // 0..23 (Florida / ET)
+  endHour: number;   // 0..23 (Florida / ET)
+}
+
 export interface AppSettings {
   interviewLocationName: string;
   interviewLocationAddress: string;
-  scheduleDays: number[]; // 0=Sun, 1=Mon, 2=Tue, 3=Wed, 4=Thu, 5=Fri, 6=Sat
-  scheduleStartHour: number; // e.g. 9
-  scheduleEndHour: number;   // e.g. 17
-  slotDurationMinutes: number; // e.g. 60
+  scheduleByDay: DaySchedule[];
+  slotDurationMinutes: SlotDurationMinutes;
+  // Legacy backward-compatibility fields:
+  scheduleDays?: number[];
+  scheduleStartHour?: number;
+  scheduleEndHour?: number;
 }

@@ -46,6 +46,7 @@
       "properties": {
         "interviewLocationName": { "type": "string" },
         "interviewLocationAddress": { "type": "string" },
+        "scheduleByDay": { "type": "array" },
         "scheduleDays": { "type": "array" },
         "scheduleStartHour": { "type": "number" },
         "scheduleEndHour": { "type": "number" },

@@ -1977,23 +1977,116 @@ export interface InterviewAppointmentRecord {
   smsSent?: boolean;
 }
 
+export const ALLOWED_SLOT_DURATIONS: number[] = [15, 30, 45, 60, 90, 120];
+
+export interface DayScheduleRecord {
+  dayOfWeek: number; // 0=Sun, 1=Mon, ..., 6=Sat
+  enabled: boolean;
+  startHour: number; // 0..23 (Florida / ET)
+  endHour: number;   // 0..23 (Florida / ET)
+}
+
 export interface AppSettingsRecord {
   interviewLocationName: string;
   interviewLocationAddress: string;
-  scheduleDays: number[]; // 0=Sun, 1=Mon, ..., 6=Sat
-  scheduleStartHour: number; // e.g. 9
-  scheduleEndHour: number;   // e.g. 17
-  slotDurationMinutes: number; // e.g. 60
+  scheduleByDay: DayScheduleRecord[];
+  slotDurationMinutes: number;
+  // Legacy fields for backward compatibility:
+  scheduleDays?: number[];
+  scheduleStartHour?: number;
+  scheduleEndHour?: number;
 }
+
+const DEFAULT_SCHEDULE_BY_DAY: DayScheduleRecord[] = [
+  { dayOfWeek: 0, enabled: true, startHour: 9, endHour: 17 }, // Sun
+  { dayOfWeek: 1, enabled: true, startHour: 9, endHour: 17 }, // Mon
+  { dayOfWeek: 2, enabled: true, startHour: 9, endHour: 17 }, // Tue
+  { dayOfWeek: 3, enabled: true, startHour: 9, endHour: 17 }, // Wed
+  { dayOfWeek: 4, enabled: true, startHour: 9, endHour: 17 }, // Thu
+  { dayOfWeek: 5, enabled: true, startHour: 9, endHour: 17 }, // Fri
+  { dayOfWeek: 6, enabled: true, startHour: 9, endHour: 17 }, // Sat
+];
 
 const DEFAULT_SETTINGS: AppSettingsRecord = {
   interviewLocationName: "10-4 Truck Parts (Company Office)",
   interviewLocationAddress: "5570 Lee St, Ste 8, Lehigh Acres, FL 33971",
+  scheduleByDay: DEFAULT_SCHEDULE_BY_DAY,
   scheduleDays: [0, 1, 2, 3, 4, 5, 6],
   scheduleStartHour: 9,
   scheduleEndHour: 17,
   slotDurationMinutes: 60
 };
+
+function normalizeSettings(raw: any): AppSettingsRecord {
+  if (!raw || typeof raw !== "object") {
+    return { ...DEFAULT_SETTINGS };
+  }
+
+  const locationName = typeof raw.interviewLocationName === "string" && raw.interviewLocationName.trim()
+    ? raw.interviewLocationName.trim()
+    : DEFAULT_SETTINGS.interviewLocationName;
+
+  const locationAddress = typeof raw.interviewLocationAddress === "string" && raw.interviewLocationAddress.trim()
+    ? raw.interviewLocationAddress.trim()
+    : DEFAULT_SETTINGS.interviewLocationAddress;
+
+  const duration = ALLOWED_SLOT_DURATIONS.includes(Number(raw.slotDurationMinutes))
+    ? Number(raw.slotDurationMinutes)
+    : 60;
+
+  // Build or migrate scheduleByDay
+  let scheduleByDay: DayScheduleRecord[];
+
+  if (Array.isArray(raw.scheduleByDay) && raw.scheduleByDay.length > 0) {
+    scheduleByDay = [];
+    for (let day = 0; day <= 6; day++) {
+      const found = raw.scheduleByDay.find((d: any) => Number(d?.dayOfWeek) === day);
+      if (found) {
+        const enabled = Boolean(found.enabled);
+        let sHour = Number(found.startHour);
+        let eHour = Number(found.endHour);
+        if (isNaN(sHour) || sHour < 0 || sHour > 23) sHour = 9;
+        if (isNaN(eHour) || eHour < 0 || eHour > 23) eHour = 17;
+        if (sHour >= eHour) {
+          sHour = 9;
+          eHour = 17;
+        }
+        scheduleByDay.push({ dayOfWeek: day, enabled, startHour: sHour, endHour: eHour });
+      } else {
+        scheduleByDay.push({ dayOfWeek: day, enabled: false, startHour: 9, endHour: 17 });
+      }
+    }
+  } else {
+    // Migration from legacy settings: scheduleDays + scheduleStartHour + scheduleEndHour
+    const legacyDays: number[] = Array.isArray(raw.scheduleDays) ? raw.scheduleDays.map(Number) : [0, 1, 2, 3, 4, 5, 6];
+    const legacyStart = Number(raw.scheduleStartHour) >= 0 && Number(raw.scheduleStartHour) <= 23 ? Number(raw.scheduleStartHour) : 9;
+    const legacyEnd = Number(raw.scheduleEndHour) >= 0 && Number(raw.scheduleEndHour) <= 23 ? Number(raw.scheduleEndHour) : 17;
+    const safeStart = legacyStart < legacyEnd ? legacyStart : 9;
+    const safeEnd = legacyStart < legacyEnd ? legacyEnd : 17;
+
+    scheduleByDay = [];
+    for (let day = 0; day <= 6; day++) {
+      scheduleByDay.push({
+        dayOfWeek: day,
+        enabled: legacyDays.includes(day),
+        startHour: safeStart,
+        endHour: safeEnd
+      });
+    }
+  }
+
+  const enabledDays = scheduleByDay.filter(d => d.enabled).map(d => d.dayOfWeek);
+
+  return {
+    interviewLocationName: locationName,
+    interviewLocationAddress: locationAddress,
+    scheduleByDay,
+    slotDurationMinutes: duration,
+    scheduleDays: enabledDays,
+    scheduleStartHour: scheduleByDay.find(d => d.enabled)?.startHour ?? 9,
+    scheduleEndHour: scheduleByDay.find(d => d.enabled)?.endHour ?? 17
+  };
+}
 
 const APPOINTMENTS_FILE = path.join(DATA_DIR, "appointments.json");
 const SETTINGS_FILE = path.join(DATA_DIR, "settings.json");
@@ -2036,7 +2129,7 @@ function getLocalSettings(): AppSettingsRecord {
   ensureSettingsDataFile();
   try {
     const raw = fs.readFileSync(SETTINGS_FILE, "utf-8");
-    return { ...DEFAULT_SETTINGS, ...JSON.parse(raw) };
+    return normalizeSettings(JSON.parse(raw));
   } catch (err) {
     console.error("[LocalStorage] Error reading settings file:", err);
     return DEFAULT_SETTINGS;
@@ -2057,7 +2150,7 @@ async function getStoredSettings(): Promise<AppSettingsRecord> {
     try {
       const doc = await firestoreClient.collection("appSettings").doc("config").get();
       if (doc.exists) {
-        return { ...DEFAULT_SETTINGS, ...(doc.data() as AppSettingsRecord) };
+        return normalizeSettings(doc.data());
       }
     } catch (fsErr) {
       handleFirestoreError('Firestore get settings error', fsErr);
@@ -2068,18 +2161,11 @@ async function getStoredSettings(): Promise<AppSettingsRecord> {
 
 async function updateStoredSettings(settingsUpdate: Partial<AppSettingsRecord>): Promise<AppSettingsRecord> {
   const current = await getStoredSettings();
-  const updated: AppSettingsRecord = {
+  const rawCombined = {
     ...current,
     ...settingsUpdate
   };
-  if (!Array.isArray(updated.scheduleDays) || updated.scheduleDays.length === 0) {
-    updated.scheduleDays = [0, 1, 2, 3, 4, 5, 6];
-  }
-  updated.scheduleStartHour = Number(updated.scheduleStartHour) || 9;
-  updated.scheduleEndHour = Number(updated.scheduleEndHour) || 17;
-  updated.slotDurationMinutes = Number(updated.slotDurationMinutes) || 60;
-  if (!updated.interviewLocationName) updated.interviewLocationName = DEFAULT_SETTINGS.interviewLocationName;
-  if (!updated.interviewLocationAddress) updated.interviewLocationAddress = DEFAULT_SETTINGS.interviewLocationAddress;
+  const updated = normalizeSettings(rawCombined);
 
   if (firestoreClient) {
     try {
@@ -2253,7 +2339,9 @@ function isValidFloridaSlot(isoString: string, settings: AppSettingsRecord): boo
   const p = Object.fromEntries(parts.map((x) => [x.type, x.value]));
   const dayMap: Record<string, number> = { Sun: 0, Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6 };
   const dayOfWeek = dayMap[p.weekday] ?? 0;
-  if (!settings.scheduleDays.includes(dayOfWeek)) return false;
+
+  const dayRule = (settings.scheduleByDay || []).find((day) => day.dayOfWeek === dayOfWeek);
+  if (!dayRule || !dayRule.enabled) return false;
 
   const hour = parseInt(p.hour === "24" ? "00" : p.hour, 10);
   const min = parseInt(p.minute, 10);
@@ -2261,8 +2349,8 @@ function isValidFloridaSlot(isoString: string, settings: AppSettingsRecord): boo
   if (sec !== 0) return false;
 
   const totalMinutes = hour * 60 + min;
-  const startMinutes = settings.scheduleStartHour * 60;
-  const endMinutes = settings.scheduleEndHour * 60;
+  const startMinutes = dayRule.startHour * 60;
+  const endMinutes = dayRule.endHour * 60;
   const duration = settings.slotDurationMinutes || 60;
 
   if (totalMinutes < startMinutes || totalMinutes + duration > endMinutes) return false;
@@ -2277,13 +2365,14 @@ function getDailyFloridaSlots(
   settings: AppSettingsRecord = DEFAULT_SETTINGS
 ) {
   const dayOfWeek = getFloridaDayOfWeek(dateStr);
-  if (!settings.scheduleDays.includes(dayOfWeek)) {
+  const dayRule = (settings.scheduleByDay || []).find((day) => day.dayOfWeek === dayOfWeek);
+  if (!dayRule || !dayRule.enabled) {
     return [];
   }
 
   const duration = settings.slotDurationMinutes || 60;
-  const startMin = settings.scheduleStartHour * 60;
-  const endMin = settings.scheduleEndHour * 60;
+  const startMin = dayRule.startHour * 60;
+  const endMin = dayRule.endHour * 60;
 
   const slots = [];
   for (let m = startMin; m + duration <= endMin; m += duration) {
@@ -2464,15 +2553,50 @@ app.put("/api/admin/settings", appointmentAdminLimiter, async (req, res) => {
     const {
       interviewLocationName,
       interviewLocationAddress,
+      scheduleByDay,
+      slotDurationMinutes,
       scheduleDays,
       scheduleStartHour,
-      scheduleEndHour,
-      slotDurationMinutes
+      scheduleEndHour
     } = req.body || {};
+
+    // Validate slotDurationMinutes if provided
+    if (slotDurationMinutes !== undefined) {
+      const durationNum = Number(slotDurationMinutes);
+      if (!ALLOWED_SLOT_DURATIONS.includes(durationNum)) {
+        return res.status(400).json({
+          error: "Invalid slot duration. Allowed values: 15, 30, 45, 60, 90, 120 minutes."
+        });
+      }
+    }
+
+    // Validate scheduleByDay if provided
+    if (scheduleByDay !== undefined) {
+      if (!Array.isArray(scheduleByDay)) {
+        return res.status(400).json({ error: "scheduleByDay must be an array." });
+      }
+      for (const day of scheduleByDay) {
+        const dOfWeek = Number(day?.dayOfWeek);
+        if (isNaN(dOfWeek) || dOfWeek < 0 || dOfWeek > 6) {
+          return res.status(400).json({ error: "Each day must have a valid dayOfWeek between 0 and 6." });
+        }
+        const sHour = Number(day?.startHour);
+        const eHour = Number(day?.endHour);
+        if (isNaN(sHour) || sHour < 0 || sHour > 23 || isNaN(eHour) || eHour < 0 || eHour > 23) {
+          return res.status(400).json({ error: "Hours must be in range 0–23." });
+        }
+        if (sHour >= eHour) {
+          return res.status(400).json({
+            error: `Start hour (${sHour}) must be less than end hour (${eHour}) for day ${dOfWeek}.`
+          });
+        }
+      }
+    }
 
     const updated = await updateStoredSettings({
       interviewLocationName: typeof interviewLocationName === "string" ? interviewLocationName.trim() : undefined,
       interviewLocationAddress: typeof interviewLocationAddress === "string" ? interviewLocationAddress.trim() : undefined,
+      scheduleByDay: Array.isArray(scheduleByDay) ? scheduleByDay : undefined,
       scheduleDays: Array.isArray(scheduleDays) ? scheduleDays.map(Number) : undefined,
       scheduleStartHour: scheduleStartHour !== undefined ? Number(scheduleStartHour) : undefined,
       scheduleEndHour: scheduleEndHour !== undefined ? Number(scheduleEndHour) : undefined,
