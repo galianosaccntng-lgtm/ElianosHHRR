@@ -297,7 +297,7 @@ function generatePrintableFinalEvaluationHtml(
 export function LiveInterviewPanel({ 
   session, 
   adminToken,
-  lang = 'es',
+  lang = 'en',
   onStateUpdate,
   onReset,
   onDumpScores,

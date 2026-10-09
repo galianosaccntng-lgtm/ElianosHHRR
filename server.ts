@@ -532,41 +532,44 @@ async function generateContentWithInfiniteResilience(request: any) {
   throw lastError || new Error(`AI Engine Quota Exceeded`);
 }
 
-function formatGuideAsPlainText(guide: SecondInterviewGuide): string {
-  let out = `=== GUÍA PARA SEGUNDA ENTREVISTA ===\n\n`;
-  out += `PUNTOS DE ENFOQUE A VERIFICAR:\n`;
+function formatGuideAsPlainText(guide: SecondInterviewGuide, lang: string = 'en'): string {
+  const isEn = lang === 'en';
+  let out = isEn ? `=== SECOND INTERVIEW GUIDE ===\n\n` : `=== GUÍA PARA SEGUNDA ENTREVISTA ===\n\n`;
+  out += isEn ? `NEURALGIC FOCUS POINTS:\n` : `PUNTOS DE ENFOQUE A VERIFICAR:\n`;
   (guide.focusPoints || []).forEach((pt, i) => {
     out += `${i + 1}. ${pt}\n`;
   });
-  out += `\nCONSEJOS PARA EL ENTREVISTADOR:\n`;
+  out += isEn ? `\nINTERVIEWER TIPS:\n` : `\nCONSEJOS PARA EL ENTREVISTADOR:\n`;
   (guide.interviewerTips || []).forEach((tip) => {
     out += `* ${tip}\n`;
   });
   const totalMins = (guide.blocks || []).reduce((acc, b) => acc + (b.minutes || 0), 0);
-  out += `\nBLOQUES DE LA ENTREVISTA (${totalMins} MINUTOS TOTAL):\n`;
+  out += isEn ? `\nINTERVIEW BLOCKS (${totalMins} MINUTES TOTAL):\n` : `\nBLOQUES DE LA ENTREVISTA (${totalMins} MINUTOS TOTAL):\n`;
   (guide.blocks || []).forEach((block, bIdx) => {
     out += `\n------------------------------------------------------------\n`;
-    out += `BLOQUE ${bIdx + 1}: ${block.title.toUpperCase()} (${block.minutes} min) ${block.mustPass ? "[ELIMINATORIO / MUST PASS]" : "[FORMATIVO / OP]"}\n`;
-    out += `Objetivo: ${block.goal}\n\n`;
+    out += isEn
+      ? `BLOCK ${bIdx + 1}: ${block.title.toUpperCase()} (${block.minutes} min) ${block.mustPass ? "[MUST PASS]" : "[FORMATIVE / OP]"}\nGoal: ${block.goal}\n\n`
+      : `BLOQUE ${bIdx + 1}: ${block.title.toUpperCase()} (${block.minutes} min) ${block.mustPass ? "[ELIMINATORIO / MUST PASS]" : "[FORMATIVO / OP]"}\nObjetivo: ${block.goal}\n\n`;
     const bQuestions = (guide.questions || []).filter((q) => (block.questionIds || []).includes(q.id));
     bQuestions.forEach((q, qIdx) => {
-      out += `Pregunta ${bIdx + 1}.${qIdx + 1} [${(q.language || "es").toUpperCase()}]: "${q.text}"\n`;
-      out += `  - Propósito: ${q.purpose}\n`;
-      out += `  - Escuchar (Buena señal): ${(q.listenFor || []).join("; ")}\n`;
-      out += `  - Alertas (Red Flags): ${(q.redFlags || []).join("; ")}\n\n`;
+      out += isEn
+        ? `Question ${bIdx + 1}.${qIdx + 1} [${(q.language || "en").toUpperCase()}]: "${q.text}"\n  - Purpose: ${q.purpose}\n  - Listen for: ${(q.listenFor || []).join("; ")}\n  - Red flags: ${(q.redFlags || []).join("; ")}\n\n`
+        : `Pregunta ${bIdx + 1}.${qIdx + 1} [${(q.language || "es").toUpperCase()}]: "${q.text}"\n  - Propósito: ${q.purpose}\n  - Escuchar (Buena señal): ${(q.listenFor || []).join("; ")}\n  - Alertas (Red Flags): ${(q.redFlags || []).join("; ")}\n\n`;
     });
   });
   out += `------------------------------------------------------------\n`;
-  out += `CRITERIOS DE DECISIÓN:\n`;
-  out += `* Contratar: ${guide.decision?.hire || "N/A"}\n`;
-  out += `* Tercera Conversación: ${guide.decision?.thirdConversation || "N/A"}\n`;
-  out += `* Declinar: ${guide.decision?.decline || "N/A"}\n`;
+  out += isEn ? `DECISION CRITERIA:\n` : `CRITERIOS DE DECISIÓN:\n`;
+  out += isEn ? `* Hire: ${guide.decision?.hire || "N/A"}\n` : `* Contratar: ${guide.decision?.hire || "N/A"}\n`;
+  out += isEn ? `* Third Conversation: ${guide.decision?.thirdConversation || "N/A"}\n` : `* Tercera Conversación: ${guide.decision?.thirdConversation || "N/A"}\n`;
+  out += isEn ? `* Decline: ${guide.decision?.decline || "N/A"}\n` : `* Declinar: ${guide.decision?.decline || "N/A"}\n`;
   return out;
 }
 
-async function generateSecondInterviewGuide(session: any, lang: string = 'es'): Promise<SecondInterviewGuide> {
+async function generateSecondInterviewGuide(session: any, lang: string = 'en'): Promise<SecondInterviewGuide> {
   const { position, candidateInfo, messages, evaluation } = session;
-  const candidateName = candidateInfo?.name || "Candidato";
+  const isEn = lang === 'en';
+  const uiLang = isEn ? 'inglés' : 'español';
+  const candidateName = candidateInfo?.name || (isEn ? "Candidate" : "Candidato");
   const userResponses = (messages || []).filter((m: any) => m.role === "user");
 
   // Determine candidate language
@@ -604,13 +607,18 @@ async function generateSecondInterviewGuide(session: any, lang: string = 'es'): 
     .join("\n");
 
   const lowConfidenceAnswers = userResponses.filter((m: any) => {
-    const textLen = m.parts?.[0]?.text?.length || 0;
+    const textLen = m.parts?.[0]?.text || "";
     const conf = m.metrics?.humanConfidence ?? (m.metrics ? humanConfidence(m.metrics, textLen) : null);
     return conf !== null && conf < 70;
   });
 
   const prompt = `Eres un Director Senior de Recursos Humanos y Operaciones de Ellianos Coffee.
 Tu tarea es generar una GUÍA PERSONALIZADA PARA LA SEGUNDA ENTREVISTA PRESENCIAL para el candidato: ${candidateName} (Puesto: ${position || "Barista"}).
+
+======================================================================
+REGLA DE ORO DE IDIOMA — MANDATORIA Y TERMINANTE (LEER PRIMERO):
+TODO el contenido textual de la guía DEBE estar escrito en ${uiLang}: focusPoints, interviewerTips, el title y el goal de cada bloque, y para cada pregunta su text, purpose, listenFor y redFlags, y los tres criterios de decision (hire, thirdConversation, decline). La ÚNICA excepción es el bloque de verificación de inglés funcional, cuyas PREGUNTAS (campo text) van en inglés, pero su purpose, listenFor y redFlags van en ${uiLang}. No mezcles idiomas en ningún otro campo bajo ninguna circunstancia.
+======================================================================
 
 === CONTEXTO DE LA EMPRESA ===
 Ellianos Coffee: Modelo de kiosco de doble carril drive-thru de 800 sq ft, altísima velocidad ("Italian Quality at America's Pace"), 4 a 6 personas por turno en espacio reducido, aperturas de madrugada (desde 4:30 AM), y apertura de nueva tienda en octubre en Lehigh Acres, FL.
@@ -632,15 +640,19 @@ ${lowConfidenceAnswers.length > 0 ? `NOTA: Hubo ${lowConfidenceAnswers.length} r
 ${(messages || []).map((m: any) => `[${(m.role || "USER").toUpperCase()}]: ${m.parts?.[0]?.text || ""}`).join("\n\n")}
 
 === INSTRUCCIONES CRÍTICAS PARA LA GUÍA ===
-Genera un objeto JSON que cumpla EXACTAMENTE con el siguiente esquema:
+Genera un objeto JSON que cumpla EXACTAMENTE con el siguiente esquema. IMPORTANTE: todos los valores de texto deben estar redactados en ${uiLang}:
 {
-  "focusPoints": ["3 a 4 frases concisas con los puntos neurálgicos a verificar en este candidato específico."],
-  "interviewerTips": ["3 reglas prácticas y concisas para el entrevistador de RRHH (ej: pedir el caso concreto y números, no acusar sobre IA/asistencia, evaluar ritmo y actitud en vivo; si el candidato declaró experiencia técnica y hay máquina de café comercial disponible, lo ideal es pedir 'muéstrame')."],
+  "focusPoints": [
+    "(write 3 to 4 concise neuralgic focus points for this candidate in ${uiLang})"
+  ],
+  "interviewerTips": [
+    "(write 3 practical rules/tips for the HR interviewer in ${uiLang})"
+  ],
   "blocks": [
     {
       "id": "block_1",
-      "title": "Nombre del bloque",
-      "goal": "Objetivo del bloque",
+      "title": "(write block title in ${uiLang})",
+      "goal": "(write block objective in ${uiLang})",
       "minutes": 10,
       "mustPass": true,
       "questionIds": ["q1", "q2"]
@@ -650,36 +662,40 @@ Genera un objeto JSON que cumpla EXACTAMENTE con el siguiente esquema:
     {
       "id": "q1",
       "block": "block_1",
-      "text": "Texto de la pregunta",
-      "language": "es",
-      "purpose": "Una sola frase que explica qué verifica exactamente esta pregunta.",
-      "listenFor": ["2 o 3 señales positivas concretas que el entrevistador debe escuchar"],
-      "redFlags": ["2 o 3 señales de alerta o respuestas evasivas"]
+      "text": "(write question text in ${uiLang}, except functional English check block which must be in English)",
+      "language": "${isEn ? 'en' : 'es'}",
+      "purpose": "(write single sentence explaining what this question verifies in ${uiLang})",
+      "listenFor": [
+        "(write 2 or 3 positive concrete signals to listen for in ${uiLang})"
+      ],
+      "redFlags": [
+        "(write 2 or 3 warning signs or evasive responses to flag in ${uiLang})"
+      ]
     }
   ],
   "decision": {
-    "hire": "Criterio claro de contratación basado en bloques (ej: Bloques must-pass >= 4.0 y bloque de inglés >= 3.0)",
-    "thirdConversation": "Criterio para tercera conversación o zona gris",
-    "decline": "Criterio de descarte (ej: Cualquier bloque must-pass <= 2.0 o inconsistencias graves)"
+    "hire": "(write clear hiring criteria based on blocks in ${uiLang})",
+    "thirdConversation": "(write criteria for third conversation or gray zone in ${uiLang})",
+    "decline": "(write clear decline criteria in ${uiLang})"
   }
 }
 
 REGLAS DE CONTENIDO:
-1. IDIOMA: La guía es para el entrevistador de RRHH de Ellianos, redactada en ${lang === 'en' ? 'inglés' : 'español'}. Las preguntas deben estar en ${lang === 'en' ? 'inglés' : 'español'} (language: "${lang === 'en' ? 'en' : 'es'}"), EXCEPTO un bloque dedicado a la verificación de inglés funcional (preguntas formuladas en inglés, language: "en"), el cual es OBLIGATORIO si el candidato respondió en español (${isSpanishSpeaker ? "SÍ - es obligatorio incluir bloque de inglés" : "opcional/breve si ya demostró inglés fluido"}).
+1. IDIOMA (MANDATO ABSOLUTO): TODO el contenido textual de la guía DEBE estar escrito en ${uiLang}: focusPoints, interviewerTips, el title y el goal de cada bloque, y para cada pregunta su text, purpose, listenFor y redFlags, y los tres criterios de decision (hire, thirdConversation, decline). La ÚNICA excepción es el bloque de verificación de inglés funcional, cuyas PREGUNTAS (campo text) van en inglés (language: "en"), pero su purpose, listenFor y redFlags van en ${uiLang}. No mezcles idiomas en ningún otro campo bajo ninguna circunstancia.
 2. ESTRUCTURA: Entre 4 y 5 bloques temáticos, 2 a 4 preguntas por bloque, sumando entre 45 y 60 minutos en total.
    - Bloques sugeridos según el caso:
-     * Experiencia Real Verificable (mustPass: true)
-     * Conocimiento Operativo & Resistencia bajo Presión (mustPass: true)
-     * Inglés Funcional para Atención al Cliente (language: "en") (${isSpanishSpeaker ? "mustPass: true" : "mustPass: false"})
-     * Adaptación al Modelo Ellianos y Disponibilidad Operativa (mustPass: true - OBLIGATORIO)
-     * Cierre, Honestidad y Compromiso
+     * ${isEn ? 'Real Verifiable Experience' : 'Experiencia Real Verificable'} (mustPass: true)
+     * ${isEn ? 'Operational Knowledge & Pressure Resilience' : 'Conocimiento Operativo & Resistencia bajo Presión'} (mustPass: true)
+     * ${isEn ? 'Functional English for Customer Service' : 'Inglés Funcional para Atención al Cliente'} (language: "en") (${isSpanishSpeaker ? "mustPass: true" : "mustPass: false"})
+     * ${isEn ? 'Ellianos Model Fit & Availability' : 'Adaptación al Modelo Ellianos y Disponibilidad Operativa'} (mustPass: true - OBLIGATORIO)
+     * ${isEn ? 'Closing, Honesty and Commitment' : 'Cierre, Honestidad y Compromiso'}
    - Marca mustPass: true en los bloques que son eliminatorios.
-   - BLOQUE OBLIGATORIO: ADAPTACIÓN AL MODELO ELLIANOS Y DISPONIBILIDAD OPERATIVA (mustPass: true):
-     Debes incluir OBLIGATORIAMENTE un bloque titulado "${lang === 'en' ? 'Ellianos Model Fit & Availability' : 'Adaptación al Modelo Ellianos y Disponibilidad'}" con mustPass: true (BLOQUE ELIMINATORIO).
+   - BLOQUE OBLIGATORIO: ${isEn ? 'ELLIANOS MODEL FIT & AVAILABILITY' : 'ADAPTACIÓN AL MODELO ELLIANOS Y DISPONIBILIDAD OPERATIVA'} (mustPass: true):
+     Debes incluir OBLIGATORIAMENTE un bloque titulado "${isEn ? 'Ellianos Model Fit & Availability' : 'Adaptación al Modelo Ellianos y Disponibilidad'}" con mustPass: true (BLOQUE ELIMINATORIO).
      * Contexto operativo: La tienda es un drive-thru de doble carril de 800 sq ft con turnos de apertura temprana de madrugada (~5:00–5:30 AM), turnos de cierre, fines de semana y días festivos, operando con personal mínimo (lean-staffed). La disponibilidad precisa es crítica.
      * Preguntas operativas obligatorias (3 a 5 preguntas en el bloque):
-       - ANCLAJE EN LO DECLARADO: Formula las preguntas citando lo que el candidato declaró por escrito en la entrevista online (ej: "${lang === 'en' ? 'In your written interview you stated you are available [X]; what is the earliest arrival time you can commit to on each of those days, and could you cover early morning openings (~5:00–5:30 AM)?' : 'Por escrito dijiste que estás disponible [X]; ¿cuál es la hora más temprana que puedes llegar esos días y podrías cubrir aperturas de madrugada (~5:00–5:30 AM)?'}").
-       - PREGUNTA OBLIGATORIA DE HORAS SEMANALES DESEADAS (OBLIGATORIA EN TODAS LAS GUÍAS): Es REQUISITO OBLIGATORIO que el bloque de disponibilidad SIEMPRE incluya una pregunta explícita que confirme cuántas HORAS POR SEMANA quiere trabajar realmente el candidato, anclada en lo que declaró online si lo mencionó (ej: "${lang === 'en' ? 'In your written interview you indicated you are looking for [X] hours; how many hours per week do you concretely want to work, and is there a minimum or maximum you need?' : 'En tu entrevista escrita indicaste que buscas [X] horas; ¿cuántas horas por semana quieres trabajar en concreto, y hay un mínimo o máximo que necesitas?'}"). Esta pregunta debe aparecer en TODAS las guías de disponibilidad, sin importar el tipo de candidato, además de las ya existentes.
+       - ANCLAJE EN LO DECLARADO: Formula las preguntas citando lo que el candidato declaró por escrito en la entrevista online (ej: "${isEn ? 'In your written interview you stated you are available [X]; what is the earliest arrival time you can commit to on each of those days, and could you cover early morning openings (~5:00–5:30 AM)?' : 'Por escrito dijiste que estás disponible [X]; ¿cuál es la hora más temprana que puedes llegar esos días y podrías cubrir aperturas de madrugada (~5:00–5:30 AM)?'}").
+       - PREGUNTA OBLIGATORIA DE HORAS SEMANALES DESEADAS (OBLIGATORIA EN TODAS LAS GUÍAS): Es REQUISITO OBLIGATORIO que el bloque de disponibilidad SIEMPRE incluya una pregunta explícita que confirme cuántas HORAS POR SEMANA quiere trabajar realmente el candidato, anclada en lo que declaró online si lo mencionó (ej: "${isEn ? 'In your written interview you indicated you are looking for [X] hours; how many hours per week do you concretely want to work, and is there a minimum or maximum you need?' : 'En tu entrevista escrita indicaste que buscas [X] horas; ¿cuántas horas por semana quieres trabajar en concreto, y hay un mínimo o máximo que necesitas?'}"). Esta pregunta debe aparecer en TODAS las guías de disponibilidad, sin importar el tipo de candidato, además de las ya existentes.
        - DETALLE OPERATIVO GRANULAR A OBTENER:
          1. Hora de llegada MÁS TEMPRANA que puede cumplir en cada uno de los días que declaró disponible (día por día, no en general).
          2. Si puede cubrir turnos de APERTURA (~5:00–5:30 AM).
@@ -688,27 +704,27 @@ REGLAS DE CONTENIDO:
          5. Disponibilidad en FESTIVOS.
          6. Cuántas HORAS POR SEMANA quiere realmente trabajar (confirmar horas exactas y si requiere un mínimo o máximo).
          7. Si tiene empleo actual, cuánto AVISO PREVIO necesitaría antes de empezar el entrenamiento, y cuándo podría comenzar.
-     * Qué escuchar (listenFor del bloque): Respuestas concretas y sin ambigüedad, coherencia con lo declarado online, disposición real para aperturas/cierres/fines de semana, certeza sobre transporte propio confiable.
-     * Alertas (redFlags del bloque): Cambios respecto a lo declarado previamente, vaguedad sobre horas de apertura/cierre, imposibilidad para los turnos que el modelo necesita, falta de disponibilidad en fines de semana o festivos.
+     * Qué escuchar (listenFor del bloque - en ${uiLang}): Respuestas concretas y sin ambigüedad, coherencia con lo declarado online, disposición real para aperturas/cierres/fines de semana, certeza sobre transporte propio confiable.
+     * Alertas (redFlags del bloque - en ${uiLang}): Cambios respecto a lo declarado previamente, vaguedad sobre horas de apertura/cierre, imposibilidad para los turnos que el modelo necesita, falta de disponibilidad en fines de semana o festivos.
 ${(position || "Barista") === "Barista" ? `   - BLOQUE OBLIGATORIO PARA BARISTA:
-     Debes incluir OBLIGATORIAMENTE un bloque titulado "${lang === 'en' ? 'Coffee Knowledge and Drink Recipes' : 'Conocimiento técnico de café y recetas'}" con mustPass: false (FORMATIVO / NO ELIMINATORIO).
+     Debes incluir OBLIGATORIAMENTE un bloque titulado "${isEn ? 'Coffee Knowledge and Drink Recipes' : 'Conocimiento técnico de café y recetas'}" con mustPass: false (FORMATIVO / NO ELIMINATORIO).
      * Objetivo del bloque: Calibrar el nivel técnico real del candidato en preparación de bebidas estándar de café y verificar en vivo lo que declaró online (NUNCA para descartarlo).
      * Minutos: 8 a 10 min.
      * Preguntas prácticas (2 a 3 preguntas en el bloque):
        - VERIFICACIÓN DE EXPERIENCIA DECLARADA ONLINE: Si de la transcripción de la primera entrevista se desprende que el candidato DECLARÓ experiencia relevante (p. ej. haber trabajado de barista en otra cadena, jalar shots o vaporizar leche), incluye preguntas ESPECÍFICAS para comprobarla en vivo, siguiendo este patrón (sin enseñar las respuestas, sin elogiar, sin decir si acierta):
          * Preguntas sobre los detalles concretos que declaró: en qué local trabajó exactamente, cuánto tiempo, por qué se fue; qué estaciones trabajó la persona PERSONALMENTE (headset/órdenes, ventanilla drive-thru, caja, comida, estación de bebidas, máquina de espresso); el rush más ocupado que recuerda y qué hizo personalmente.
-         * Preguntas prácticas de "camíname / muéstrame": "camíname cómo harías un latte de principio a fin", "¿cómo vaporizarías la leche?", "¿qué cambiarías para un macchiato?", "si los shots empiezan a salir distintos de lo normal (muy rápidos o lentos), ¿qué revisas?". En interviewerTips, si hay máquina disponible, recordar pedir "muéstrame".
-         * Qué escuchar (listenFor): Respuestas naturales e inmediatas, detalles vividos que solo alguien con experiencia real conoce (temperatura del jarro al tacto, purga de la lanceta, textura de microespuma, calibración del molino).
-         * Alertas (redFlags): Titubeos largos, respuestas genéricas de manual sin fluidez práctica, inconsistencias con lo que dijo en la entrevista online.
+         * Preguntas prácticas de "camíname / muéstrame": ${isEn ? '"walk me through how you make a latte from start to finish", "how would you steam the milk?", "what would you adjust for a macchiato?", "if espresso shots start pulling differently (too fast or too slow), what do you check?"' : '"camíname cómo harías un latte de principio a fin", "¿cómo vaporizarías la leche?", "¿qué cambiarías para un macchiato?", "si los shots empiezan a salir distintos de lo normal (muy rápidos o lentos), ¿qué revisas?"'}. En interviewerTips, si hay máquina disponible, recordar pedir "muéstrame" ("show me").
+         * Qué escuchar (listenFor - en ${uiLang}): Respuestas naturales e inmediatas, detalles vividos que solo alguien con experiencia real conoce (temperatura del jarro al tacto, purga de la lanceta, textura de microespuma, calibración del molino).
+         * Alertas (redFlags - en ${uiLang}): Titubeos largos, respuestas genéricas de manual sin fluidez práctica, inconsistencias con lo que dijo en la entrevista online.
        - SI EL CANDIDATO NO DECLARÓ EXPERIENCIA PREVIA: NO fuerces este bloque de verificación técnica; enfócate en disposición, capacidad de aprendizaje, actitud positiva y hábitos para retener recetas y procedimientos técnicos.
        - Pregunta sobre el MENÚ EXTENSO: Preguntar cómo se organiza para memorizar y dominar un menú amplio y variado (signatures, freezers, shakes, smoothies, Red Bull Rush, Ellianos Edge, comidas) manteniendo velocidad y precisión bajo presión.
        - CRITERIO DEL ÁREA Y CONOCIMIENTO TRANSFERIBLE: Evaluar la comprensión GENERAL del oficio de barista, NO el acierto o fallo de un nombre específico de bebida. Si el candidato desconoce un término (como Caffe Breve), indagar sobre el CONCEPTO (ej: vaporizar half-and-half en vez de leche) o pasar a otro fundamento; reconocer que un barista con experiencia en otra cadena con menú diferente transfiere sus habilidades rápidamente a Ellianos.
        - REGLA CRÍTICA: NO preguntar por las recetas secretas propietarias de Ellianos (Caffe Dolce, Tuscany Toffee, Carmella, Joy Shot) como si las debiera saber de antemano.
-     * Qué escuchar general (listenFor): Entusiasmo por el café, curiosidad por dominar la técnica de Ellianos, métodos claros para estudiar y memorizar recetas, respeto por la consistencia de bebidas, o destreza técnica sólida si ya fue barista.
-     * Alertas generales (redFlags): Resistencia a seguir recetas estandarizadas o arrogancia frente a los estándares de la marca. (IMPORTANTE: La falta de experiencia previa o no saber recetas NO es una alerta roja ni motivo de descarte).
+     * Qué escuchar general (listenFor - en ${uiLang}): Entusiasmo por el café, curiosidad por dominar la técnica de Ellianos, métodos claros para estudiar y memorizar recetas, respeto por la consistencia de bebidas, o destreza técnica sólida si ya fue barista.
+     * Alertas generales (redFlags - en ${uiLang}): Resistencia a seguir recetas estandarizadas o arrogancia frente a los estándares de la marca. (IMPORTANTE: La falta de experiencia previa o no saber recetas NO es una alerta roja ni motivo de descarte).
    - NOTA DE DECISIÓN PARA BARISTA: En los criterios de decisión ("decision"), el bloque de conocimiento técnico de café y recetas es FORMATIVO (mustPass: false). Ningún candidato a Barista debe ser declinado ("decline") por falta de experiencia en café si cumple los bloques eliminatorios de actitud, ritmo y compromiso, ya que Ellianos entrena desde cero.` : ''}
 3. ANCLAJE OBLIGATORIO EN SU TRANSCRIPCIÓN:
-   - Cita textualmente afirmaciones que el candidato hizo por escrito: "Por escrito mencionaste que [CITA] — cuéntame un caso real donde ocurrió: qué hiciste tú exactamente y cuál fue el resultado numérico/operativo".
+   - Cita textualmente afirmaciones que el candidato hizo por escrito (${isEn ? '"In your written interview you mentioned that [QUOTE] — tell me a real situation where this happened: what exactly did you do and what was the operational/numerical outcome?"' : '"Por escrito mencionaste que [CITA] — cuéntame un caso real donde ocurrió: qué hiciste tú exactamente y cuál fue el resultado numérico/operativo"'}).
    - Cada debilidad identificada en la evaluación debe tener al menos una pregunta que la explore a fondo.
    - Cada fortaleza afirmada sin evidencia en la entrevista previa debe tener una pregunta que indague detalles que solo alguien que lo vivió conoce (procedimientos, tiempos, herramientas, volúmenes).
 4. SEÑALES DE AUTENTICIDAD:
@@ -1168,7 +1184,7 @@ app.post("/api/admin/sessions/:id/second-interview-guide", secondInterviewGuideL
   if (!verifyAdminAccess(authHeader, res)) return;
 
   const { id } = req.params;
-  const { force, lang, targetPosition } = req.body || {};
+  const { force, lang = 'en', targetPosition } = req.body || {};
 
   try {
     const sessions = await getStoredSessions();
@@ -1195,7 +1211,7 @@ app.post("/api/admin/sessions/:id/second-interview-guide", secondInterviewGuideL
       return res.json({ success: true, guide: session.secondInterviewGuide, session });
     }
 
-    const guide = await generateSecondInterviewGuide({ ...session, position: effectivePos }, lang || 'es');
+    const guide = await generateSecondInterviewGuide({ ...session, position: effectivePos }, lang || 'en');
     guide.forPosition = effectivePos;
 
     let updatedLiveInterview = session.liveInterview;
@@ -1499,7 +1515,7 @@ ${(messages || []).map((m: any) => `[${(m.role || "USER").toUpperCase()}]: ${m.p
         generatedGuide = await generateSecondInterviewGuide({
           ...session,
           evaluation: evaluationText,
-        });
+        }, 'en');
       } catch (guideErr) {
         console.warn("[Evaluate] Non-blocking second interview guide auto-generation failed:", guideErr);
       }
@@ -1510,7 +1526,7 @@ ${(messages || []).map((m: any) => `[${(m.role || "USER").toUpperCase()}]: ${m.p
     const transporter = getMailTransporter();
     if (transporter) {
       try {
-        const guideSection = generatedGuide ? `\n\n${formatGuideAsPlainText(generatedGuide)}` : "";
+        const guideSection = generatedGuide ? `\n\n${formatGuideAsPlainText(generatedGuide, 'en')}` : "";
         const mailOptions = {
           from: MAIL_FROM,
           to: "accounting@jjpartnersco.com",
@@ -1940,8 +1956,9 @@ app.post("/api/admin/sessions/:id/live-interview/analyze", liveInterviewAnalyzeL
   if (!verifyAdminAccess(authHeader, res)) return;
 
   const { id } = req.params;
-  const { audioData, mimeType, accumulatedTranscript, accumulatedBlockStatus, activeSuggestion, consentConfirmedAt, isFinal, uiLanguage } = req.body;
-  const langName = uiLanguage === 'en' ? 'English' : 'Spanish';
+  const { audioData, mimeType, accumulatedTranscript, accumulatedBlockStatus, activeSuggestion, consentConfirmedAt, isFinal, uiLanguage = 'en' } = req.body;
+  const effectiveLang = uiLanguage || 'en';
+  const langName = effectiveLang === 'en' ? 'English' : 'Spanish';
   
   const sessions = await getStoredSessions();
   const session = sessions.find((s) => s.id === id);
@@ -1981,6 +1998,12 @@ app.post("/api/admin/sessions/:id/live-interview/analyze", liveInterviewAnalyzeL
     const systemPrompt = `You are an AI assistant for a human interviewer conducting a live bilingual (English/Spanish) job interview.
 You are receiving a short audio segment of the ongoing interview.
 Your task is to transcribe the audio, map progress against the interview guide blocks, and manage the SINGLE STABLE ACTIVE QUESTION ("activeSuggestion") for the interviewer.
+
+======================================================================
+MANDATORY OUTPUT LANGUAGE — ABSOLUTE REQUIREMENT:
+All analysis fields (evidence, reasoning, gaps, activeSuggestion.exactQuestion, activeSuggestion.text, suggestions.text, positionSuggestion.reason, and languageNote) MUST be written in ${langName} ONLY.
+Even if the candidate or interviewer speaks Spanish, your analysis and questions MUST be in ${langName}. Do NOT mix languages.
+======================================================================
 
 Current Position being evaluated: "${currentRole}" (Candidate originally applied for: "${session.position || 'Barista'}").
 
@@ -2281,8 +2304,9 @@ app.post("/api/admin/sessions/:id/live-interview/probe-questions", liveInterview
   if (!verifyAdminAccess(authHeader, res)) return;
 
   const { id } = req.params;
-  const { blockId, uiLanguage } = req.body;
-  const langName = uiLanguage === 'en' ? 'English' : 'Spanish';
+  const { blockId, uiLanguage = 'en' } = req.body;
+  const effectiveLang = uiLanguage || 'en';
+  const langName = effectiveLang === 'en' ? 'English' : 'Spanish';
   
   let session: any = null;
   if (firestoreClient) {
@@ -2305,6 +2329,8 @@ app.post("/api/admin/sessions/:id/live-interview/probe-questions", liveInterview
 
   try {
     const prompt = `You are a Senior Hiring & HR Director at Ellianos Coffee.
+MANDATORY OUTPUT LANGUAGE: Write all probe questions strictly in ${langName} ONLY. Do NOT use any other language.
+
 Generate 2 to 3 sharp, concrete follow-up probe questions in ${langName} for the interviewer to ask during this live interview for block "${block.title}" (Goal: ${block.goal}).
 Current block status: ${blockStatus.status || 'not_covered'} (Rating: ${blockStatus.liveRating || 'N/A'}, gaps: ${blockStatus.gaps || 'none'}).
 Live interview transcript so far:
@@ -2312,7 +2338,7 @@ ${transcript || "No transcript yet."}
 
 Requirements:
 - The questions must be direct, operational, and non-confrontational.
-- Written strictly in ${langName}.
+- Written strictly in ${langName} ONLY.
 - Return JSON: { "questions": ["Question 1", "Question 2", "Question 3"] }`;
 
     const response = await generateContentWithInfiniteResilience({
@@ -2339,8 +2365,9 @@ app.post("/api/admin/sessions/:id/live-interview/final-evaluation", async (req, 
   if (!verifyAdminAccess(authHeader, res)) return;
 
   const { id } = req.params;
-  const { uiLanguage } = req.body;
-  const langName = uiLanguage === 'en' ? 'English' : 'Spanish';
+  const { uiLanguage = 'en' } = req.body || {};
+  const effectiveLang = uiLanguage || 'en';
+  const langName = effectiveLang === 'en' ? 'English' : 'Spanish';
 
   let session: any = null;
   if (firestoreClient) {
@@ -2359,7 +2386,7 @@ app.post("/api/admin/sessions/:id/live-interview/final-evaluation", async (req, 
   if (!guide) {
     return res.status(400).json({
       success: false,
-      error: uiLanguage === 'en'
+      error: effectiveLang === 'en'
         ? "Interview guide not found. Please generate the guide first."
         : "No se encontró la guía de entrevista. Por favor genera la guía primero."
     });
@@ -2369,18 +2396,32 @@ app.post("/api/admin/sessions/:id/live-interview/final-evaluation", async (req, 
   if (!transcript.trim()) {
     return res.status(400).json({
       success: false,
-      error: uiLanguage === 'en'
+      error: effectiveLang === 'en'
         ? "No interview transcript found. A conversation must be recorded before evaluating."
         : "No se encontró transcripción de la entrevista. Se requiere haber grabado conversación para evaluar."
     });
   }
 
   const blockStatus = session.liveInterview?.blockStatus || {};
-  const candidateName = session.candidateInfo?.name || (uiLanguage === 'en' ? "Candidate" : "Candidato");
+  const candidateName = session.candidateInfo?.name || (effectiveLang === 'en' ? "Candidate" : "Candidato");
   const position = session.position || "Barista";
 
   try {
     const prompt = `You are a Senior HR and Hiring Director at Ellianos Coffee conducting an in-depth, definitive final evaluation of candidate ${candidateName} for the ${position} position at our brand-new Lehigh Acres, FL location.
+
+======================================================================
+MANDATORY OUTPUT LANGUAGE — ABSOLUTE REQUIREMENT:
+Write EVERY SINGLE text field in ${langName} ONLY:
+- narrative
+- strengths
+- concerns
+- bestFitPosition.reasoning
+- claimedExperienceVerification.evidence
+- inconsistenciesWithOnlineInterview
+- confirmedAvailability (weekends, notes, earliestArrival, noticePeriodAndStartDate)
+- blockSummary titles and notes
+Even if parts of the transcript or the entire interview were spoken in the other language, your evaluation analysis MUST be 100% written in ${langName}. Do NOT mix languages.
+======================================================================
 
 You must analyze the ENTIRE transcript of the live interview, the interview guide blocks (including must-pass criteria, listen-for signals, red flags, and decision criteria), and the accumulated block status and live ratings.
 
@@ -2595,7 +2636,7 @@ Return a strict JSON object with this exact structure:
       inconsistenciesWithOnlineInterview,
       confirmedAvailability,
       generatedAt: new Date().toISOString(),
-      language: uiLanguage || 'es'
+      language: effectiveLang
     };
 
     // Store in session
@@ -2611,7 +2652,7 @@ Return a strict JSON object with this exact structure:
     console.error("[LiveInterviewFinalEval] Error generating evaluation:", err);
     return res.status(500).json({
       success: false,
-      error: err.message || (uiLanguage === 'en' ? "Failed to generate final evaluation" : "Error al generar la evaluación final")
+      error: err.message || (effectiveLang === 'en' ? "Failed to generate final evaluation" : "Error al generar la evaluación final")
     });
   }
 });
@@ -2622,19 +2663,20 @@ app.post("/api/admin/sessions/:id/live-interview/evaluate-for-position", liveInt
   if (!verifyAdminAccess(authHeader, res)) return;
 
   const { id } = req.params;
-  const { targetPosition, uiLanguage } = req.body || {};
+  const { targetPosition, uiLanguage = 'en' } = req.body || {};
+  const effectiveLang = uiLanguage || 'en';
 
   const validPositions = ['Barista', 'Shift Leader', 'Store Manager'];
   if (!targetPosition || !validPositions.includes(targetPosition)) {
     return res.status(400).json({
       success: false,
-      error: uiLanguage === 'en'
+      error: effectiveLang === 'en'
         ? "Invalid target position. Must be Barista, Shift Leader, or Store Manager."
         : "Posición inválida. Debe ser Barista, Shift Leader o Store Manager."
     });
   }
 
-  const langName = uiLanguage === 'en' ? 'English' : 'Spanish';
+  const langName = effectiveLang === 'en' ? 'English' : 'Spanish';
 
   try {
     let session: any = null;
@@ -2655,7 +2697,7 @@ app.post("/api/admin/sessions/:id/live-interview/evaluate-for-position", liveInt
     if (!session) {
       return res.status(404).json({
         success: false,
-        error: uiLanguage === 'en' ? "Session not found" : "Sesión no encontrada"
+        error: effectiveLang === 'en' ? "Session not found" : "Sesión no encontrada"
       });
     }
 
@@ -2663,13 +2705,13 @@ app.post("/api/admin/sessions/:id/live-interview/evaluate-for-position", liveInt
     if (!transcript) {
       return res.status(400).json({
         success: false,
-        error: uiLanguage === 'en'
+        error: effectiveLang === 'en'
           ? "No interview transcript found. A conversation must be recorded before evaluating."
           : "No se encontró transcripción de la entrevista. Se requiere haber grabado conversación para evaluar."
       });
     }
 
-    const candidateName = session.candidateInfo?.name || "Candidate";
+    const candidateName = session.candidateInfo?.name || (effectiveLang === 'en' ? "Candidate" : "Candidato");
     const appliedPosition = session.position || "Barista";
 
     let targetRoleProfile = "";
@@ -2691,6 +2733,13 @@ ROLE PROFILE: STORE MANAGER (Full P&L, store operations, staffing, inventory & c
     }
 
     const prompt = `You are the Senior Talent & Operations Director at Ellianos Coffee (Lehigh Acres, FL drive-thru kiosk franchise).
+
+======================================================================
+MANDATORY OUTPUT LANGUAGE — ABSOLUTE REQUIREMENT:
+Write EVERY SINGLE text field (strengths, concerns, narrative) in ${langName} ONLY.
+Even if parts of the transcript or the entire interview were spoken in the other language, your evaluation analysis MUST be 100% written in ${langName}. Do NOT mix languages.
+======================================================================
+
 Conduct a CROSS-POSITION EVALUATION of this candidate specifically for the role of "${targetPosition}".
 The candidate originally applied for "${appliedPosition}". You are evaluating their suitability and readiness IF HIRED AS A "${targetPosition}".
 
@@ -2768,7 +2817,7 @@ Return a strict JSON object with this exact structure:
       blockSummary: [],
       narrative: String(aiResult.narrative || ''),
       generatedAt: new Date().toISOString(),
-      language: uiLanguage || 'es'
+      language: effectiveLang
     };
 
     session.liveInterview = {
@@ -2786,7 +2835,7 @@ Return a strict JSON object with this exact structure:
     console.error("[LiveInterviewCrossEval] Error evaluating for position:", err);
     return res.status(500).json({
       success: false,
-      error: err.message || (uiLanguage === 'en' ? "Failed to evaluate for target position" : "Error al evaluar para la posición objetivo")
+      error: err.message || (effectiveLang === 'en' ? "Failed to evaluate for target position" : "Error al evaluar para la posición objetivo")
     });
   }
 });

@@ -7,7 +7,7 @@ export function getInitialAdminLang(): AdminLang {
     const saved = localStorage.getItem(ADMIN_LANG_KEY);
     if (saved === 'en' || saved === 'es') return saved;
   } catch {}
-  return 'es';
+  return 'en';
 }
 
 export function setSavedAdminLang(lang: AdminLang): void {
